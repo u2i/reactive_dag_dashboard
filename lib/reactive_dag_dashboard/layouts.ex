@@ -29,6 +29,26 @@ defmodule ReactiveDagDashboard.Layouts do
           .rdd li { border: 1px solid currentColor; border-radius: .375rem;
                     padding: .375rem .625rem; }
           .rdd-badge { font-size: .6875rem; opacity: .6; margin-left: .375rem; }
+          .rdd li a { color: inherit; text-decoration: none; }
+          .rdd li a:hover { text-decoration: underline; }
+          .rdd-count { font-size: .6875rem; opacity: .6; margin-left: .375rem; }
+          .rdd-status { font-size: .6875rem; margin-left: .375rem;
+                        border: 1px solid currentColor; border-radius: .25rem;
+                        padding: 0 .25rem; }
+          /* a cell whose rows could not be read — NOT the same as an empty one */
+          .rdd-unknown { border-style: dashed; opacity: .55; }
+          .rdd-drawer { margin-top: 1.5rem; border: 1px solid currentColor;
+                        border-radius: .375rem; padding: .75rem 1rem; }
+          .rdd-drawer dl { display: grid; grid-template-columns: max-content 1fr;
+                           gap: .125rem .75rem; margin: .5rem 0 0; }
+          .rdd-drawer dt { font-size: .6875rem; text-transform: uppercase;
+                           letter-spacing: .06em; opacity: .6; }
+          .rdd-drawer dd { margin: 0; }
+          .rdd-drawer ul, .rdd-report ol { display: block; }
+          .rdd-drawer li, .rdd-report li { border: 0; padding: .125rem 0; }
+          .rdd-report ol { margin: .25rem 0 0; padding-left: 1.25rem;
+                           list-style: decimal; }
+          .rdd-cause { opacity: .6; }
         </style>
       </head>
       <body>

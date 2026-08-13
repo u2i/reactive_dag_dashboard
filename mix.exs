@@ -52,14 +52,16 @@ defmodule ReactiveDagDashboard.MixProject do
 
   defp deps do
     [
-      # git until 0.17 is on hex (release-please u2i/reactive_dag#25) — the
-      # dashboard needs ReactiveDag.Insights, which lands with #41.
-      {:reactive_dag, github: "u2i/reactive_dag"},
+      # git until 0.17 is on hex (release-please u2i/reactive_dag#25). Pinned to
+      # a tag rather than tracking main: 0.17 removed the coordination tuple and
+      # the tableless verdict node, so an unpinned dep would have silently
+      # changed what this page renders.
+      {:reactive_dag, github: "u2i/reactive_dag", tag: "v0.17.0-rc.5"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:jason, "~> 1.4"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
-      {:floki, ">= 0.30.0", only: :test}
+      {:lazy_html, ">= 0.1.0", only: :test}
     ]
   end
 end

@@ -49,6 +49,39 @@ defmodule ReactiveDagDashboard.Layouts do
           .rdd-report ol { margin: .25rem 0 0; padding-left: 1.25rem;
                            list-style: decimal; }
           .rdd-cause { opacity: .6; }
+
+          /* ── the two directional views ──────────────────────────────────── */
+          .rdd-tabs { display: flex; gap: 1rem; margin-bottom: 1rem;
+                      font-size: .8125rem; }
+          .rdd-tabs a { color: inherit; opacity: .6; text-decoration: none;
+                        padding-bottom: .125rem; }
+          .rdd-tabs a:hover { opacity: 1; }
+          .rdd-tabs .rdd-active { opacity: 1; font-weight: 600;
+                                  border-bottom: 2px solid currentColor; }
+          .rdd-picker ul { margin-bottom: .5rem; }
+          .rdd-picker .rdd-active { font-weight: 600; text-decoration: underline; }
+          .rdd-note { font-weight: 400; text-transform: none; letter-spacing: 0;
+                      margin-left: .5rem; }
+          .rdd-empty { opacity: .6; }
+
+          /* the tree is a LIST, indented by depth: one row per path step, so a
+             cell reached twice occupies two rows. */
+          .rdd-tree ol { list-style: none; margin: .25rem 0 0; padding: 0;
+                         display: flex; flex-direction: column; gap: .125rem; }
+          .rdd-row { display: flex; align-items: center; gap: .375rem;
+                     border: 0; padding: .25rem 0;
+                     padding-left: calc(var(--indent) * 1.5rem); }
+          .rdd-row a { color: inherit; }
+          .rdd-rail { width: .75rem; height: 1px; background: currentColor;
+                      opacity: .3; flex: none; }
+          .rdd-row:first-child .rdd-rail { visibility: hidden; }
+          .rdd-via { font-size: .6875rem; opacity: .5; }
+          /* a repeat is DIMMED, not hidden — the path is real work, but its
+             detail was already read once */
+          .rdd-repeat-row { opacity: .55; }
+          .rdd-repeat { font-style: italic; }
+          .rdd-cyclic-row { color: #b3341f; }
+          .rdd-cyclic { font-weight: 600; }
         </style>
       </head>
       <body>

@@ -78,18 +78,96 @@ defmodule ReactiveDagDashboard.FixtureGraph do
     end
   end
 
-  @doc "The plan, as the router's `:plan` MFA would return it."
-  def plan, do: ReactiveDag.Node.graph([Expenses, CategoryHealth])
+  # a SECOND consumer of the same leaf, and a union over both — so the graph has
+  # real fan-out, real fan-in, and a diamond. A tree view over a graph without
+  # them proves nothing about how it handles repeated paths.
+  defmodule SpendRollup do
+    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets, extensions: [ReactiveDag.Node]
 
-  @doc "Seed both cells so the page has real rows to report."
+    ets do
+    end
+
+    attributes do
+      attribute :key, :string, primary_key?: true, allow_nil?: false, public?: true
+      attribute :status, :string, public?: true
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :upsert do
+        upsert?(true)
+        accept([:key, :status])
+      end
+    end
+
+    reactive do
+      id(:spend_rollup)
+      op(:fold)
+
+      reduce over: :expenses,
+             group_by: :category,
+             into: fn _cat, rows ->
+               %{status: if(length(rows) > 1, do: "present", else: "thin")}
+             end
+    end
+  end
+
+  # the diamond's tip: both consumers feed it, so it is reached by TWO paths
+  # from `expenses`
+  defmodule AllVerdicts do
+    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets, extensions: [ReactiveDag.Node]
+
+    ets do
+    end
+
+    attributes do
+      attribute :check, :string, primary_key?: true, allow_nil?: false, public?: true
+      attribute :subject, :string, primary_key?: true, allow_nil?: false, public?: true
+      attribute :status, :string, public?: true
+    end
+
+    actions do
+      defaults [:read, :destroy]
+
+      create :upsert do
+        upsert?(true)
+        accept([:check, :subject, :status])
+      end
+    end
+
+    reactive do
+      id(:all_verdicts)
+
+      union from: [:category_health, :spend_rollup],
+            into: [check: :cell, subject: :key, status: :status]
+    end
+  end
+
+  @doc "The plan, as the router's `:plan` MFA would return it."
+  def plan, do: ReactiveDag.Node.graph([Expenses, CategoryHealth, SpendRollup, AllVerdicts])
+
+  # recompute/2 returns {:ok, changed} or {:ok, changed, meta} depending on the
+  # node shape; normalise so the seed does not care which.
+  defp maybe_meta({:ok, changed}), do: {:ok, changed, %{}}
+  defp maybe_meta({:ok, changed, meta}), do: {:ok, changed, meta}
+
+  @doc "Seed every cell so the page has real rows to report."
   def seed do
-    for r <- [Expenses, CategoryHealth], row <- Ash.read!(r), do: Ash.destroy!(row)
+    for r <- [Expenses, CategoryHealth, SpendRollup, AllVerdicts],
+        row <- Ash.read!(r),
+        do: Ash.destroy!(row)
 
     for {k, cat, amt} <- [{"e1", "travel", 500.0}, {"e2", "meals", 40.0}] do
       Expenses |> Ash.Changeset.for_create(:upsert, %{key: k, category: cat, amount: amt}) |> Ash.create!()
     end
 
-    {:ok, _} = ReactiveDag.Node.Recompute.recompute(plan().cells["category_health"], ["*"])
+    p = plan()
+
+    for id <- ["category_health", "spend_rollup", "all_verdicts"] do
+      {:ok, _, _} = maybe_meta(ReactiveDag.Node.Recompute.recompute(p.cells[id], ["*"]))
+    end
+
     :ok
   end
 end

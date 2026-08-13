@@ -93,6 +93,12 @@ defmodule ReactiveDagDashboard.PageLive do
   def render(assigns) do
     ~H"""
     <main class="rdd">
+      <nav class="rdd-tabs">
+        <.link patch={String.trim_trailing(@base_path, "/") |> nonempty("/")} class="rdd-active">graph</.link>
+        <.link patch={"#{@base_path}from"}>where a change goes</.link>
+        <.link patch={"#{@base_path}into"}>what feeds this</.link>
+      </nav>
+
       <h1>reactive_dag</h1>
 
       <p :if={@levels == []}>No cells in this plan.</p>
@@ -155,6 +161,9 @@ defmodule ReactiveDagDashboard.PageLive do
     </main>
     """
   end
+
+  defp nonempty("", fallback), do: fallback
+  defp nonempty(path, _fallback), do: path
 
   # a cell whose rows could not be read reports no statuses AND no keys. That is
   # NOT the same as an empty cell, and must not render as a quiet one.

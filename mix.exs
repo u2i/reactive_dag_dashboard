@@ -52,13 +52,12 @@ defmodule ReactiveDagDashboard.MixProject do
 
   defp deps do
     [
-      # git until 0.17 is on hex (release-please u2i/reactive_dag#25). Tracks
-      # main, where the 0.17 release candidates land — `mix deps.update
-      # reactive_dag` moves to the newest rc, and mix.lock pins the exact SHA in
-      # between so a breaking change never arrives unannounced. 0.17 removed the
-      # coordination tuple and the tableless verdict node; the tests below are
-      # what catch the next one.
-      {:reactive_dag, github: "u2i/reactive_dag", branch: "main"},
+      # an rc, explicitly: this needs the drain telemetry that landed in
+      # 0.17.0-rc.6, and `~> 0.17.0-rc` would not resolve a pre-release. Bump it
+      # deliberately — 0.17 removed the coordination tuple, the tableless verdict
+      # node and the :on_step callback, and the tests here are what catch the next
+      # such change rather than a silently-tracking ref.
+      {:reactive_dag, "== 0.17.0-rc.6"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

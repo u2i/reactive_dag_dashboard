@@ -58,7 +58,7 @@ defmodule ReactiveDagDashboard.MixProject do
       # between so a breaking change never arrives unannounced. 0.17 removed the
       # coordination tuple and the tableless verdict node; the tests below are
       # what catch the next one.
-      {:reactive_dag, github: "u2i/reactive_dag", branch: "feat/drain-telemetry"},
+      {:reactive_dag, github: "u2i/reactive_dag", branch: "main"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

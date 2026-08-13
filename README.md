@@ -57,6 +57,35 @@ end
 The dashboard needs to know which graph to show. `:plan` names an MFA returning
 a `%ReactiveDag.Plan{}` — usually the same call your drain uses.
 
+## Live updates
+
+Without any further wiring the page **polls** every few seconds, which works and
+is visibly labelled as such. To make it live, point the dashboard at your PubSub
+and attach the observer once at boot:
+
+```elixir
+# config
+config :reactive_dag_dashboard, pubsub: MyApp.PubSub
+
+# application.ex, after the supervision tree is up
+ReactiveDagDashboard.Observer.attach(MyApp.PubSub)
+```
+
+That attaches a `:telemetry` handler to the drain's events and rebroadcasts them,
+so every open dashboard sees each drain as it happens. The header says `live`
+rather than `polling` once it is working.
+
+**It refreshes only what moved.** A drain step names the cell it recomputed, so
+the page re-reads that cell rather than the graph — per-cell state is one query
+each, and re-reading forty of them per step would cost more than the work being
+observed. The poll timer stays as a fallback (slower when live), because a page
+that silently froze would be worse than a slow one.
+
+The handler runs inside the drain's process and does nothing but copy a few
+fields into a message, so watching the dashboard cannot slow the engine down. A
+broadcast failure is logged and swallowed for the same reason: an unreachable
+dashboard must not be able to fail a drain.
+
 ## Retaining the drain trace
 
 `Drain.run/2` returns a `%Report{}` and most callers discard it — the drain

@@ -34,18 +34,17 @@ defmodule ReactiveDagDashboard.PageLive do
 
   alias ReactiveDag.Insights
 
-  @refresh_ms 5_000
+  alias ReactiveDagDashboard.LiveUpdates
 
   @impl true
   def mount(_params, session, socket) do
-    if connected?(socket), do: :timer.send_interval(@refresh_ms, self(), :refresh)
-
     {:ok,
      socket
      |> assign(:plan_mfa, session["plan_mfa"])
      |> assign(:base_path, "/")
      |> assign(:selected, nil)
-     |> load()}
+     |> load()
+     |> LiveUpdates.setup()}
   end
 
   # The host chooses where to mount us (`reactive_dag_dashboard "/ops/dag"`), so
@@ -71,7 +70,29 @@ defmodule ReactiveDagDashboard.PageLive do
     |> then(&if String.ends_with?(&1, "/"), do: &1, else: &1 <> "/")
   end
 
+  # ── live updates ────────────────────────────────────────────────────────────
+  # A step names the cell that moved, so only that cell is re-read. Steps are
+  # accumulated and flushed together: a 40-cell drain should cost a few renders,
+  # not forty.
   @impl true
+  def handle_info({:drain_step, cell_id, _changed_keys}, socket) do
+    {:noreply, socket |> LiveUpdates.seen_event() |> LiveUpdates.mark_stale(cell_id)}
+  end
+
+  def handle_info(:flush_stale, socket) do
+    {:noreply, LiveUpdates.refresh_stale(socket, socket.assigns.plan)}
+  end
+
+  # the drain finished: `pending` and the retained report both moved, and neither
+  # is per-cell, so this one is a full reload.
+  def handle_info({:drain_done, _report}, socket) do
+    {:noreply, socket |> LiveUpdates.seen_event() |> load()}
+  end
+
+  def handle_info({:drain_failed, _reason}, socket) do
+    {:noreply, LiveUpdates.seen_event(socket)}
+  end
+
   def handle_info(:refresh, socket), do: {:noreply, load(socket)}
 
   # every read goes through Insights, so the dashboard never reaches into
@@ -96,6 +117,9 @@ defmodule ReactiveDagDashboard.PageLive do
       <nav class="rdd-tabs">
         <.link patch={String.trim_trailing(@base_path, "/") |> nonempty("/")} class="rdd-active">graph</.link>
         <.link patch={"#{@base_path}from"}>where a change goes</.link>
+        <span class={"rdd-live rdd-live-#{@live?}"} title={live_hint(@live?)}>
+          <%= if @live?, do: "live", else: "polling" %>
+        </span>
         <.link patch={"#{@base_path}into"}>what feeds this</.link>
       </nav>
 
@@ -161,6 +185,12 @@ defmodule ReactiveDagDashboard.PageLive do
     </main>
     """
   end
+
+  # "nothing changed" and "I am not being told about changes" look identical on a
+  # static page, so the mode is stated rather than left to be inferred.
+  defp live_hint(true), do: "subscribed to drain telemetry — updates arrive as they happen"
+  defp live_hint(false),
+    do: "no drain events; polling. Call ReactiveDagDashboard.Observer.attach/1 to go live."
 
   defp nonempty("", fallback), do: fallback
   defp nonempty(path, _fallback), do: path

@@ -21,17 +21,16 @@ defmodule ReactiveDagDashboard.TreeLive do
   alias ReactiveDag.Insights
   alias ReactiveDagDashboard.Tree
 
-  @refresh_ms 5_000
+  alias ReactiveDagDashboard.LiveUpdates
 
   @impl true
   def mount(_params, session, socket) do
-    if connected?(socket), do: :timer.send_interval(@refresh_ms, self(), :refresh)
-
     {:ok,
      socket
      |> assign(:plan_mfa, session["plan_mfa"])
      |> assign(:base_path, "/")
-     |> load()}
+     |> load()
+     |> LiveUpdates.setup()}
   end
 
   @impl true
@@ -47,7 +46,29 @@ defmodule ReactiveDagDashboard.TreeLive do
      |> assign_tree()}
   end
 
+  # ── live updates ────────────────────────────────────────────────────────────
+  # A step names the cell that moved, so only that cell is re-read. Steps are
+  # accumulated and flushed together: a 40-cell drain should cost a few renders,
+  # not forty.
   @impl true
+  def handle_info({:drain_step, cell_id, _changed_keys}, socket) do
+    {:noreply, socket |> LiveUpdates.seen_event() |> LiveUpdates.mark_stale(cell_id)}
+  end
+
+  def handle_info(:flush_stale, socket) do
+    {:noreply, LiveUpdates.refresh_stale(socket, socket.assigns.plan)}
+  end
+
+  # the drain finished: the frontier is now empty, so `pending` moved too — and
+  # that is graph-wide, not per-cell.
+  def handle_info({:drain_done, _report}, socket) do
+    {:noreply, socket |> LiveUpdates.seen_event() |> load() |> assign_tree()}
+  end
+
+  def handle_info({:drain_failed, _reason}, socket) do
+    {:noreply, LiveUpdates.seen_event(socket)}
+  end
+
   def handle_info(:refresh, socket), do: {:noreply, socket |> load() |> assign_tree()}
 
   defp load(socket) do
@@ -96,6 +117,9 @@ defmodule ReactiveDagDashboard.TreeLive do
         <.link patch={"#{@base_path}from"} class={active(@direction, :downstream)}>
           where a change goes
         </.link>
+        <span class={"rdd-live rdd-live-#{@live?}"} title={live_hint(@live?)}>
+          <%= if @live?, do: "live", else: "polling" %>
+        </span>
         <.link patch={"#{@base_path}into"} class={active(@direction, :upstream)}>
           what feeds this
         </.link>
@@ -155,6 +179,12 @@ defmodule ReactiveDagDashboard.TreeLive do
 
   # the mount root has no trailing slash — "/ops/dag/" and "/ops/dag" are the
   # same page to a browser but only one matches the route cleanly.
+  # "nothing changed" and "I am not being told about changes" look identical on a
+  # static page, so the mode is stated rather than left to be inferred.
+  defp live_hint(true), do: "subscribed to drain telemetry — updates arrive as they happen"
+  defp live_hint(false),
+    do: "no drain events; polling. Call ReactiveDagDashboard.Observer.attach/1 to go live."
+
   defp nonempty("", fallback), do: fallback
   defp nonempty(path, _fallback), do: path
 

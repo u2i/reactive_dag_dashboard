@@ -82,6 +82,15 @@ defmodule ReactiveDagDashboard.Layouts do
           .rdd-repeat { font-style: italic; }
           .rdd-cyclic-row { color: #b3341f; }
           .rdd-cyclic { font-weight: 600; }
+
+          /* live vs polling — stated, not inferred */
+          .rdd-live { margin-left: auto; font-size: .6875rem; letter-spacing: .06em;
+                      text-transform: uppercase; display: inline-flex;
+                      align-items: center; gap: .375rem; }
+          .rdd-live::before { content: ""; width: .4375rem; height: .4375rem;
+                              border-radius: 50%; background: currentColor; }
+          .rdd-live-true { color: #1d7a4c; }
+          .rdd-live-false { color: currentColor; opacity: .45; }
         </style>
       </head>
       <body>

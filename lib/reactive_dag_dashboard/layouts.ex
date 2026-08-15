@@ -91,6 +91,17 @@ defmodule ReactiveDagDashboard.Layouts do
                               border-radius: 50%; background: currentColor; }
           .rdd-live-true { color: #1d7a4c; }
           .rdd-live-false { color: currentColor; opacity: .45; }
+
+          /* the one thing the page DOES rather than displays */
+          .rdd-scan { margin-top: .75rem; }
+          .rdd-origin { margin: .25rem 0 .5rem; font-size: .8125rem; opacity: .7; }
+          .rdd-actions { display: flex; gap: .5rem; }
+          .rdd-actions button { font: inherit; font-size: .8125rem;
+                                color: inherit; background: none; cursor: pointer;
+                                border: 1px solid currentColor; border-radius: .25rem;
+                                padding: .25rem .625rem; }
+          .rdd-actions button:hover { opacity: .7; }
+          .rdd-scan-result { margin: .5rem 0 0; font-size: .8125rem; opacity: .8; }
         </style>
       </head>
       <body>

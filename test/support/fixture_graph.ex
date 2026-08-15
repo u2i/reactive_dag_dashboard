@@ -41,6 +41,7 @@ defmodule ReactiveDagDashboard.FixtureGraph do
     reactive do
       id(:expenses)
       leaf?(true)
+      scan(ReactiveDagDashboard.FixtureGraph.ExpenseScan, args: [recent: true], every: "0 * * * *")
     end
   end
 
@@ -141,6 +142,30 @@ defmodule ReactiveDagDashboard.FixtureGraph do
 
       union from: [:category_health, :spend_rollup],
             into: [check: :cell, subject: :key, status: :status]
+    end
+  end
+
+  defmodule ExpenseScan do
+    @behaviour ReactiveDag.Source
+
+    def start_link, do: Agent.start_link(fn -> [] end, name: __MODULE__)
+    def polls, do: Agent.get(__MODULE__, &Enum.reverse/1)
+
+    @impl true
+    def id, do: :expense_scan
+    @impl true
+    def leaf_cells(_g), do: ["expenses"]
+    @impl true
+    def origin, do: %{label: "Finance export"}
+    @impl true
+    def poll(opts) do
+      if Process.whereis(__MODULE__), do: Agent.update(__MODULE__, &[opts | &1])
+
+      # a deep pass reaches an upstream the cheap one never touches, and that
+      # upstream is down — the shape a real crawler hits on a full crawl
+      unreachable = if opts[:recent] == false, do: [{"archive", :timeout}], else: []
+
+      {:ok, %{changed: [], unreachable: unreachable}}
     end
   end
 

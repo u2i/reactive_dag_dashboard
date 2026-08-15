@@ -32,7 +32,7 @@ defmodule ReactiveDagDashboard.PageLive do
   """
   use Phoenix.LiveView
 
-  alias ReactiveDag.Insights
+  alias ReactiveDag.{Insights, Source}
 
   alias ReactiveDagDashboard.LiveUpdates
 
@@ -43,6 +43,7 @@ defmodule ReactiveDagDashboard.PageLive do
      |> assign(:plan_mfa, session["plan_mfa"])
      |> assign(:base_path, "/")
      |> assign(:selected, nil)
+     |> assign(:scan_result, nil)
      |> load()
      |> LiveUpdates.setup()}
   end
@@ -69,6 +70,59 @@ defmodule ReactiveDagDashboard.PageLive do
     |> String.replace_suffix(suffix, "")
     |> then(&if String.ends_with?(&1, "/"), do: &1, else: &1 <> "/")
   end
+
+  # Running a scanner is the one thing this page DOES rather than displays. It
+  # stays a host-triggered action — the library exposes `poll_cell/3` and the
+  # page calls it — so nothing here decides when a scan should happen, only that
+  # someone asked for one now.
+  @impl true
+  def handle_event("scan", %{"cell" => cell_id, "mode" => mode}, socket) do
+    opts = scan_opts(mode, socket.assigns.controls[cell_id])
+
+    result =
+      case Source.poll_cell(socket.assigns.plan, cell_id, opts) do
+        {:ok, %{changed: changed} = res} ->
+          unreachable = Map.get(res, :unreachable, [])
+
+          # An outage is not a quiet success. A scan that could not look must not
+          # render as a scan that found nothing — the honest gap, on screen.
+          if unreachable == [] do
+            "scanned #{cell_id}: #{length(changed)} key(s) changed"
+          else
+            "scanned #{cell_id}: #{length(changed)} changed, " <>
+              "#{length(unreachable)} upstream(s) unreachable — results are incomplete"
+          end
+
+        {:error, :no_scanner} ->
+          "#{cell_id} has no scanner"
+
+        {:error, reason} ->
+          "scan failed: #{inspect(reason)}"
+      end
+
+    {:noreply, socket |> assign(:scan_result, result) |> load()}
+  end
+
+  defp scan_opts("full", control), do: full_scan_opts(control)
+  defp scan_opts(_default, _control), do: []
+
+  # a "full" scan overrides each declared default with its opposite, which is the
+  # only general inversion available: the library knows the standing args, not
+  # what they mean.
+  defp full_scan_opts(nil), do: []
+
+  defp full_scan_opts(%{args: args}) do
+    Enum.map(args, fn
+      {k, v} when is_boolean(v) -> {k, not v}
+      {k, _v} -> {k, nil}
+    end)
+  end
+
+  defp origin_label(%{origin: %{label: label}}), do: label
+  defp origin_label(%{source: mod}), do: inspect(mod)
+
+  defp scan_label(%{args: []}), do: "run scan"
+  defp scan_label(_control), do: "quick scan"
 
   # ── live updates ────────────────────────────────────────────────────────────
   # A step names the cell that moved, so only that cell is re-read. Steps are
@@ -108,6 +162,7 @@ defmodule ReactiveDagDashboard.PageLive do
     |> assign(:status, Map.new(Insights.summary(plan), &{&1.id, &1}))
     |> assign(:pending, MapSet.new(Insights.pending(plan)))
     |> assign(:report, Insights.last_report())
+    |> assign(:controls, ReactiveDag.Source.controls(plan))
   end
 
   @impl true
@@ -156,6 +211,36 @@ defmodule ReactiveDagDashboard.PageLive do
           <dt>keys</dt>
           <dd><%= key_count(@status[@selected]) %></dd>
         </dl>
+
+        <section :if={@controls[@selected]} class="rdd-scan">
+          <h3>scanner</h3>
+
+          <p class="rdd-origin">
+            <%= origin_label(@controls[@selected]) %>
+            <span :if={@controls[@selected].every} class="rdd-badge">
+              every <%= @controls[@selected].every %>
+            </span>
+          </p>
+
+          <div class="rdd-actions">
+            <button phx-click="scan" phx-value-cell={@selected} phx-value-mode="default">
+              <%= scan_label(@controls[@selected]) %>
+            </button>
+
+            <button
+              :if={@controls[@selected].args != []}
+              phx-click="scan"
+              phx-value-cell={@selected}
+              phx-value-mode="full"
+              title={"overrides #{inspect(@controls[@selected].args)}"}
+            >
+              full scan
+            </button>
+          </div>
+
+        </section>
+
+        <p :if={@scan_result} class="rdd-scan-result"><%= @scan_result %></p>
 
         <section :if={@status[@selected].failing_sample != []}>
           <h3>failing</h3>

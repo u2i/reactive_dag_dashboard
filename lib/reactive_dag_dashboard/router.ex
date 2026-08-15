@@ -46,6 +46,14 @@ defmodule ReactiveDagDashboard.Router do
           on_mount: extra_on_mount do
           live "/", ReactiveDagDashboard.PageLive, :index, as: route_name
           live "/cell/:cell_id", ReactiveDagDashboard.PageLive, :cell, as: route_name
+
+          # the two directional views. `/from/:id` answers "a change here goes
+          # WHERE"; `/into/:id` answers "this table is fed by WHAT". Both are
+          # the same expansion with the edge index reversed.
+          live "/from", ReactiveDagDashboard.TreeLive, :downstream, as: route_name
+          live "/from/:cell_id", ReactiveDagDashboard.TreeLive, :downstream, as: route_name
+          live "/into", ReactiveDagDashboard.TreeLive, :upstream, as: route_name
+          live "/into/:cell_id", ReactiveDagDashboard.TreeLive, :upstream, as: route_name
         end
       end
     end

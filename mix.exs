@@ -52,14 +52,18 @@ defmodule ReactiveDagDashboard.MixProject do
 
   defp deps do
     [
-      # git until 0.17 is on hex (release-please u2i/reactive_dag#25) — the
-      # dashboard needs ReactiveDag.Insights, which lands with #41.
-      {:reactive_dag, github: "u2i/reactive_dag"},
+      # an rc, explicitly: this needs the drain telemetry that landed in
+      # 0.17.0-rc.6, and `~> 0.17.0-rc` would not resolve a pre-release. Bump it
+      # deliberately — 0.17 removed the coordination tuple, the tableless verdict
+      # node and the :on_step callback, and the tests here are what catch the next
+      # such change rather than a silently-tracking ref.
+      {:reactive_dag, "== 0.17.0-rc.8"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
+      {:phoenix_pubsub, "~> 2.1"},
       {:jason, "~> 1.4"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
-      {:floki, ">= 0.30.0", only: :test}
+      {:lazy_html, ">= 0.1.0", only: :test}
     ]
   end
 end

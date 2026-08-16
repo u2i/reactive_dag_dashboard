@@ -49,7 +49,9 @@ defmodule ReactiveDagDashboard.Components do
               <code :if={s.every} class="text-xs"><%= s.every %></code>
               <span :if={!s.every} class="text-xs opacity-40">on demand</span>
             </td>
-            <td class="text-right tabular-nums"><%= key_count(@status[s.cell]) %></td>
+            <td class="text-right tabular-nums" title={count_title(@status[s.cell])}>
+              <%= key_count(@status[s.cell]) %>
+            </td>
             <td class="text-right">
               <button
                 class="btn btn-xs btn-ghost"
@@ -102,7 +104,17 @@ defmodule ReactiveDagDashboard.Components do
             <%= row.routes %> routes
           </span>
 
-          <span class="text-xs opacity-50 tabular-nums ml-auto">
+          <span
+            :for={{status, n} <- statuses(@status[row.id])}
+            class={["badge badge-xs", status_class(status)]}
+          >
+            <%= status %> <%= n %>
+          </span>
+
+          <span
+            class="text-xs opacity-50 tabular-nums ml-auto"
+            title={count_title(@status[row.id])}
+          >
             <%= key_count(@status[row.id]) %>
           </span>
         </button>
@@ -179,6 +191,64 @@ defmodule ReactiveDagDashboard.Components do
         <p :if={@detail.steps == []} class="text-xs opacity-50">
           no recorded recomputes
         </p>
+
+        <div :if={@detail.scanner} class="border-t border-base-300 pt-3 mt-1">
+          <div class="text-xs uppercase tracking-wide opacity-50 mb-1">
+            scanner
+            <span :if={@detail.scanner.origin} class="normal-case opacity-70">
+              · <%= @detail.scanner.origin[:label] %>
+            </span>
+          </div>
+
+          <div class="flex gap-2 items-center flex-wrap">
+            <button class="btn btn-xs" phx-click="scan" phx-value-cell={@detail.id} phx-value-mode="default">
+              <%= if @detail.scanner.args != [], do: "quick scan", else: "run scan" %>
+            </button>
+
+            <button
+              :if={@detail.scanner.args != []}
+              class="btn btn-xs btn-outline"
+              phx-click="scan"
+              phx-value-cell={@detail.id}
+              phx-value-mode="full"
+              title="ignores the declared bound"
+            >
+              full scan
+            </button>
+
+            <code :if={@detail.scanner.every} class="text-xs opacity-60">
+              every <%= @detail.scanner.every %>
+            </code>
+          </div>
+        </div>
+
+        <div :if={@detail.slices != []} class="border-t border-base-300 pt-3 mt-1">
+          <div class="text-xs uppercase tracking-wide opacity-50 mb-1">reprocess</div>
+
+          <div :for={slice <- @detail.slices} class="flex gap-2 items-center flex-wrap mb-1">
+            <span class="text-xs opacity-60"><%= slice.label %></span>
+
+            <button
+              :for={value <- slice.values || []}
+              class="btn btn-xs btn-ghost"
+              phx-click="reprocess"
+              phx-value-cell={@detail.id}
+              phx-value-column={slice.column}
+              phx-value-value={value}
+            >
+              <%= value %>
+            </button>
+          </div>
+
+          <button
+            class="btn btn-xs btn-outline"
+            phx-click="reprocess"
+            phx-value-cell={@detail.id}
+            title="and everything below it"
+          >
+            whole cell
+          </button>
+        </div>
       </div>
     </div>
     """
@@ -198,7 +268,33 @@ defmodule ReactiveDagDashboard.Components do
   defp ms(us) when is_integer(us), do: "#{Float.round(us / 1000, 1)}ms"
   defp ms(_), do: "—"
 
+  # A nil status is "this node has no :status column" — a rollup, not a verdict —
+  # so only real statuses get a chip. Showing `nil` would be noise on most nodes.
+  defp statuses(nil), do: []
+
+  defp statuses(%{statuses: statuses}) do
+    statuses
+    |> Enum.reject(fn {k, _} -> is_nil(k) end)
+    |> Enum.sort()
+  end
+
+  # `present` is the good case and needs no colour; anything else is the host's
+  # own vocabulary, and a warning tint is the honest default for "not present".
+  defp status_class("present"), do: "badge-ghost"
+  defp status_class(_other), do: "badge-warning badge-outline"
+
   # three states, one of which is a problem. See NodeDetail / Insights `rows:`.
+  # `changed` alone cannot separate "nothing needed redoing" from "the request
+  # never reached the rows", so the count carries WHY it is what it is.
+  defp count_title(nil), do: "no status for this cell"
+  defp count_title(%{rows: :unreadable}), do: "could not read this node's rows"
+
+  defp count_title(%{rows: :elsewhere}),
+    do: "this node keeps its rows elsewhere — nothing to count here"
+
+  defp count_title(%{key_count: 0}), do: "no rows"
+  defp count_title(%{key_count: n}), do: "#{n} keys"
+
   defp key_count(nil), do: "?"
   defp key_count(%{rows: :unreadable}), do: "?"
   defp key_count(%{rows: :elsewhere}), do: "—"

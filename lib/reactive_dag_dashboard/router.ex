@@ -44,16 +44,12 @@ defmodule ReactiveDagDashboard.Router do
           root_layout: {ReactiveDagDashboard.Layouts, :root},
           session: %{"plan_mfa" => plan_mfa},
           on_mount: extra_on_mount do
-          live("/", ReactiveDagDashboard.PageLive, :index, as: route_name)
-          live("/cell/:cell_id", ReactiveDagDashboard.PageLive, :cell, as: route_name)
-
-          # the two directional views. `/from/:id` answers "a change here goes
-          # WHERE"; `/into/:id` answers "this table is fed by WHAT". Both are
-          # the same expansion with the edge index reversed.
-          live("/from", ReactiveDagDashboard.TreeLive, :downstream, as: route_name)
-          live("/from/:cell_id", ReactiveDagDashboard.TreeLive, :downstream, as: route_name)
-          live("/into", ReactiveDagDashboard.TreeLive, :upstream, as: route_name)
-          live("/into/:cell_id", ReactiveDagDashboard.TreeLive, :upstream, as: route_name)
+          # ONE view. It used to be three — an index by depth plus the two
+          # directional trees — each answering a slice of the same question and
+          # none of them alone: you found a cell on the index, went to /from to
+          # see what it reached, then back to read what it held.
+          live("/", ReactiveDagDashboard.DagLive, :index, as: route_name)
+          live("/cell/:cell_id", ReactiveDagDashboard.DagLive, :cell, as: route_name)
         end
       end
     end

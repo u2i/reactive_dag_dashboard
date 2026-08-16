@@ -37,7 +37,8 @@ defmodule ReactiveDagDashboard.SourceLink do
   A `compute` or `run` node has a module; a declarative `reduce`/`join` is
   described by its own DSL and needs nothing here.
   """
-  @spec describe(struct() | nil) :: %{module: module(), summary: String.t() | nil, url: String.t() | nil} | nil
+  @spec describe(struct() | nil) ::
+          %{module: module(), summary: String.t() | nil, url: String.t() | nil} | nil
   def describe(nil), do: nil
 
   def describe(cell) do

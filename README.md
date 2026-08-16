@@ -29,6 +29,28 @@ to hosts with no Phoenix at all (a mix task, a JSON endpoint, an alert). Keeping
 it in the core library also keeps Phoenix and LiveView out of `reactive_dag`'s
 dependency tree.
 
+## Styling: the host provides it
+
+The dashboard is built with [daisyUI](https://daisyui.com) class names and ships
+no CSS. Add it to your `app.css`:
+
+```css
+@import "tailwindcss";
+@plugin "daisyui";
+```
+
+That is a requirement, not a nicety — without it the page renders unstyled
+rather than degraded.
+
+It used to ship its own inline stylesheet so that mounting never touched the
+host's assets. The trade was a dashboard that could never match the app around
+it, and a hand-maintained stylesheet that grew a component at a time. Inheriting
+your theme is worth the one line.
+
+If you want your own chrome — a nav bar, a user menu — pass `:root_layout` and
+the dashboard's own layout is never used.
+
+
 ## Installation
 
 ```elixir

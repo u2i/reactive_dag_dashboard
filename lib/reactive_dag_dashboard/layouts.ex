@@ -94,6 +94,28 @@ defmodule ReactiveDagDashboard.Layouts do
           .rdd-converge { border: 1px solid currentColor; border-radius: .25rem;
                           padding: 0 .25rem; opacity: .8; }
 
+          /* the hierarchy: structure drawn with rails, algebra named on the
+             node. A DAG is not a tree, so a converging cell expands once and
+             its other arrivals are drawn as references rather than repeated. */
+          .rdd-hier ol { list-style: none; margin: .25rem 0 0; padding: 0;
+                         display: flex; flex-direction: column; gap: .0625rem; }
+          .rdd-hier-row { display: flex; align-items: baseline; gap: .375rem;
+                          border: 0; padding: .1875rem 0;
+                          padding-left: calc(var(--indent) * 1.25rem); }
+          .rdd-hier-row a { color: inherit; font-weight: 500; }
+          .rdd-branch { opacity: .35; font-family: ui-monospace, monospace;
+                        flex: none; }
+          /* the operator, which IS the relationship — not decoration */
+          .rdd-op { font-size: .6875rem; opacity: .75; font-family: ui-monospace, monospace;
+                    border: 1px solid currentColor; border-radius: .25rem;
+                    padding: 0 .3125rem; }
+          .rdd-role { font-size: .6875rem; opacity: .55; font-style: italic; }
+          .rdd-detail { font-size: .6875rem; opacity: .45;
+                        font-family: ui-monospace, monospace; }
+          /* a reference is dimmed: the edge is real, the subtree is elsewhere */
+          .rdd-ref-row { opacity: .5; }
+          .rdd-ref { font-style: italic; }
+
           /* live vs polling — stated, not inferred */
           .rdd-live { margin-left: auto; font-size: .6875rem; letter-spacing: .06em;
                       text-transform: uppercase; display: inline-flex;

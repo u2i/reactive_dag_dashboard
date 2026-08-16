@@ -176,7 +176,7 @@ defmodule ReactiveDagDashboard.TreeLive do
         <h2>
           <%= @paths %> <%= if @paths == 1, do: "route", else: "routes" %>
           <span class="rdd-note">
-            structure, with each cell expanded once —
+            every route drawn in full, so a shared cell repeats —
             <.link patch={"#{@base_path}#{segment(@direction)}/#{@selected}?shape=cells"}>
               flat list by distance
             </.link>

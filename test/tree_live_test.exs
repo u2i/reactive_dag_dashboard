@@ -61,6 +61,26 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
       refute html =~ "one crawl, 1 leaves"
     end
 
+    test "the header describes what the body actually does" do
+      # it said "each cell expanded once" while rendering every route in full —
+      # a caption contradicting the thing it captions
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+
+      refute html =~ "expanded once"
+      assert html =~ "every route drawn in full"
+    end
+
+    test "each row carries its depth as an indent step" do
+      # NOTE: this pins the MARKUP only. The bug it followed was pure CSS —
+      # `.rdd li` (0,1,1) beat a bare `.rdd-hier-row` (0,1,0), so rows rendered
+      # as full-width bordered boxes and the indent was invisible. The markup was
+      # correct throughout, so no assertion on HTML could have caught it; the
+      # fix is verified by eye and guarded by the comment in layouts.ex.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+
+      assert html =~ "--indent: 2", "a depth-2 row exists to be indented"
+    end
+
     test "the default is a hierarchy: children under parents" do
       {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
 

@@ -130,6 +130,85 @@ defmodule ReactiveDagDashboard.TreeTest do
     end
   end
 
+  describe "hierarchy/2 — structure kept, convergence marked" do
+    defp rows(plan, from), do: plan |> Tree.downstream(from) |> then(&Tree.hierarchy(plan, &1))
+
+    test "the root is first, at depth 0", %{plan: plan} do
+      [first | _] = rows(plan, "expenses")
+
+      assert first.id == "expenses"
+      assert first.depth == 0
+      refute first.ref?
+    end
+
+    test "children sit one level under their parent", %{plan: plan} do
+      rows = rows(plan, "expenses")
+      ch = Enum.find(rows, &(&1.id == "category_health"))
+
+      assert ch.depth == 1
+      assert ch.via == "expenses"
+    end
+
+    test "a converging cell EXPANDS once, at its deepest route", %{plan: plan} do
+      rows = rows(plan, "expenses")
+      expanded = Enum.filter(rows, &(&1.id == "all_verdicts" and not &1.ref?))
+
+      assert length(expanded) == 1
+    end
+
+    test "and its other arrival is still drawn, as a reference", %{plan: plan} do
+      rows = rows(plan, "expenses")
+      all = Enum.filter(rows, &(&1.id == "all_verdicts"))
+
+      # BOTH edges are visible — that is the point; one just does not re-expand
+      assert length(all) == 2
+      assert Enum.count(all, & &1.ref?) == 1
+    end
+
+    test "a reference names every parent it is reached from", %{plan: plan} do
+      row = Enum.find(rows(plan, "expenses"), &(&1.id == "all_verdicts"))
+
+      assert row.arrivals == ["category_health", "spend_rollup"]
+      assert row.routes == 2
+    end
+
+    test "a single-route cell is not marked as converging", %{plan: plan} do
+      row = Enum.find(rows(plan, "expenses"), &(&1.id == "category_health"))
+
+      assert row.routes == 1
+      refute row.ref?
+    end
+
+    test "last? marks the final child, for drawing the rails", %{plan: plan} do
+      rows = rows(plan, "expenses")
+
+      # the root is the only node at depth 0, so it is last
+      assert hd(rows).last?
+      assert Enum.any?(rows, &(&1.depth > 0 and &1.last?))
+      assert Enum.any?(rows, &(&1.depth > 0 and not &1.last?))
+    end
+
+    test "every reachable cell appears at least once", %{plan: plan} do
+      ids = plan |> rows("expenses") |> Enum.map(& &1.id) |> Enum.uniq() |> Enum.sort()
+
+      assert ids == [
+               "all_verdicts",
+               "category_health",
+               "expense_notes",
+               "expenses",
+               "spend_rollup"
+             ]
+    end
+
+    test "it works upstream too", %{plan: plan} do
+      rows = plan |> Tree.upstream("all_verdicts") |> then(&Tree.hierarchy(plan, &1))
+
+      assert hd(rows).id == "all_verdicts"
+      assert Enum.count(rows, &(&1.id == "expenses")) == 2, "reached through both consumers"
+      assert Enum.count(rows, &(&1.id == "expenses" and not &1.ref?)) == 1
+    end
+  end
+
   describe "levels/2 — one row per cell, for following a source" do
     test "a cell reached twice appears ONCE", %{plan: plan} do
       rows =

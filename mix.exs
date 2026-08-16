@@ -57,7 +57,7 @@ defmodule ReactiveDagDashboard.MixProject do
       # deliberately — 0.17 removed the coordination tuple, the tableless verdict
       # node and the :on_step callback, and the tests here are what catch the next
       # such change rather than a silently-tracking ref.
-      {:reactive_dag, "== 0.17.0-rc.15"},
+      {:reactive_dag, "== 0.17.0-rc.16"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

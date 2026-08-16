@@ -85,7 +85,12 @@ defmodule ReactiveDagDashboard.LiveUpdates do
   """
   @spec mark_stale(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
   def mark_stale(socket, cell_id) do
-    socket = Phoenix.Component.assign(socket, :stale_cells, MapSet.put(socket.assigns.stale_cells, cell_id))
+    socket =
+      Phoenix.Component.assign(
+        socket,
+        :stale_cells,
+        MapSet.put(socket.assigns.stale_cells, cell_id)
+      )
 
     if socket.assigns.flush_scheduled? do
       socket

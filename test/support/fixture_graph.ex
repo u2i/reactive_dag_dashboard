@@ -202,6 +202,32 @@ defmodule ReactiveDagDashboard.FixtureGraph do
     end
   end
 
+  # No table BY DESIGN — the write-elsewhere / escape-hatch shape. Nothing to
+  # count here is not a failure to count, and the dashboard must not dress it as
+  # one.
+  #
+  # Hung off `unscanned` (its own isolated root) rather than the diamond, so the
+  # structural counts every other test asserts stay put. A shared fixture is
+  # load-bearing; growing the part under test should not renumber the rest.
+  defmodule Published do
+    use Ash.Resource,
+      domain: Domain,
+      data_layer: Ash.DataLayer.Simple,
+      extensions: [ReactiveDag.Node]
+
+    reactive do
+      id(:published)
+      depends_on([:unscanned])
+      compute(ReactiveDagDashboard.FixtureGraph.NoopOp)
+    end
+  end
+
+  defmodule NoopOp do
+    @behaviour ReactiveDag.Op
+    @impl true
+    def recompute(_cell, _keys), do: {:ok, []}
+  end
+
   # A FINGERPRINTED node — the shape a reprocess has to defeat.
   #
   # `per_key` skips rows whose declared inputs have not moved, and after a prompt
@@ -413,7 +439,8 @@ defmodule ReactiveDagDashboard.FixtureGraph do
         Minutes,
         Resolutions,
         Unscanned,
-        VerdictAudit
+        VerdictAudit,
+        Published
       ])
 
   # recompute/2 returns {:ok, changed} or {:ok, changed, meta} depending on the

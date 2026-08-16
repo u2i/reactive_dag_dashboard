@@ -203,7 +203,7 @@ defmodule ReactiveDagDashboard.TreeLive do
 
             <span :if={row.cyclic?} class="rdd-badge rdd-cyclic">cycle</span>
 
-            <span class="rdd-count"><%= key_count(@status[row.id]) %></span>
+            <span class="rdd-count" title={count_title(@status[row.id])}><%= key_count(@status[row.id]) %></span>
 
             <span :for={{status, n} <- statuses(@status[row.id])} class="rdd-status">
               <%= status %>&nbsp;<%= n %>
@@ -241,7 +241,7 @@ defmodule ReactiveDagDashboard.TreeLive do
                 <%= row.routes %> routes
               </span>
 
-              <span class="rdd-count"><%= key_count(@status[row.id]) %></span>
+              <span class="rdd-count" title={count_title(@status[row.id])}><%= key_count(@status[row.id]) %></span>
 
               <span :for={{status, n} <- statuses(@status[row.id])} class="rdd-status">
                 <%= status %>&nbsp;<%= n %>
@@ -279,7 +279,7 @@ defmodule ReactiveDagDashboard.TreeLive do
             </span>
             <span :if={row.cyclic?} class="rdd-badge rdd-cyclic">cycle</span>
 
-            <span class="rdd-count"><%= key_count(@status[row.id]) %></span>
+            <span class="rdd-count" title={count_title(@status[row.id])}><%= key_count(@status[row.id]) %></span>
 
             <span :for={{status, n} <- statuses(@status[row.id])} class="rdd-status">
               <%= status %>&nbsp;<%= n %>
@@ -380,9 +380,25 @@ defmodule ReactiveDagDashboard.TreeLive do
   defp row_class(%{repeat?: true}), do: "rdd-row rdd-repeat-row"
   defp row_class(_), do: "rdd-row"
 
+  # `key_count: 0` is three different states, and only one is a problem. The
+  # library says which in `rows:` — a real table that is empty, a node that keeps
+  # its rows elsewhere (the write-elsewhere and escape-hatch shapes), or a read
+  # that actually failed. Showing `?` for all three raises an alarm on two
+  # non-problems, and the loudest reading wins: a publish root, often the node an
+  # app actually reads, rendered as broken.
   defp key_count(nil), do: "?"
-  defp key_count(%{key_count: 0}), do: "?"
+  defp key_count(%{rows: :unreadable}), do: "?"
+  defp key_count(%{rows: :elsewhere}), do: "—"
   defp key_count(%{key_count: n}), do: n
+
+  defp count_title(nil), do: "no status for this cell"
+  defp count_title(%{rows: :unreadable}), do: "could not read this node's rows"
+
+  defp count_title(%{rows: :elsewhere}),
+    do: "this node keeps its rows elsewhere — nothing to count here"
+
+  defp count_title(%{key_count: 0}), do: "no rows"
+  defp count_title(%{key_count: n}), do: "#{n} keys"
 
   defp statuses(nil), do: []
 

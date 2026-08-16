@@ -89,7 +89,10 @@ defmodule ReactiveDagDashboard.Algebra do
   defp on(_), do: ""
 
   defp by(%{group_by: g}) when is_atom(g) and not is_nil(g), do: " by #{inspect(g)}"
-  defp by(%{group_by: g}) when is_list(g) and g != [], do: " by #{Enum.map_join(g, ", ", &inspect/1)}"
+
+  defp by(%{group_by: g}) when is_list(g) and g != [],
+    do: " by #{Enum.map_join(g, ", ", &inspect/1)}"
+
   defp by(_), do: ""
 
   defp aggregate_label(%{kind: kind, relationship: rel}) when not is_nil(kind),

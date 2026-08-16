@@ -200,10 +200,13 @@ defmodule ReactiveDagDashboard.Tree do
       |> Enum.group_by(& &1.id, & &1.via)
       |> Map.new(fn {id, vias} -> {id, vias |> Enum.uniq() |> Enum.sort()} end)
 
-    walk_hierarchy(tree, arrivals, plan, 0, true, [])
+    # Rooted at the tree's OWN id, not a constant: the page renders one tree per
+    # source, and a shared root prefix collides in the DOM — LiveView rejects
+    # duplicate ids outright.
+    walk_hierarchy(tree, arrivals, plan, 0, true, [], tree.id)
   end
 
-  defp walk_hierarchy(node, arrivals, plan, depth, last?, acc) do
+  defp walk_hierarchy(node, arrivals, plan, depth, last?, acc, path) do
     row = %{
       id: node.id,
       cell: node.cell,
@@ -212,7 +215,15 @@ defmodule ReactiveDagDashboard.Tree do
       last?: last?,
       cyclic?: node.cyclic?,
       arrivals: Map.get(arrivals, node.id, []),
-      routes: length(Map.get(arrivals, node.id, []))
+      routes: length(Map.get(arrivals, node.id, [])),
+      # how many nodes read this one. Rendered as a pill so a COLLAPSED row
+      # still says how much is folded under it — a collapsed node with no count
+      # looks like a leaf, which is the failure mode of collapsing by default.
+      children: length(node.children),
+      # a stable id for the collapse toggle, unique per PATH rather than per
+      # cell: an inline-expanded node appears more than once, and collapsing one
+      # occurrence must not collapse the others.
+      path: path
     }
 
     # A cycle is still not descended into: that is a malformed graph rather than
@@ -223,7 +234,7 @@ defmodule ReactiveDagDashboard.Tree do
     children
     |> Enum.with_index()
     |> Enum.reduce(acc ++ [row], fn {child, i}, acc ->
-      walk_hierarchy(child, arrivals, plan, depth + 1, i == last, acc)
+      walk_hierarchy(child, arrivals, plan, depth + 1, i == last, acc, "#{path}-#{i}")
     end)
   end
 

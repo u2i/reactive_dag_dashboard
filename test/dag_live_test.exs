@@ -47,11 +47,12 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       # the duplicate-heading bug: a source feeding two leaves printed its
       # origin above each of them, reading as two sources of the same name.
       #
-      # Scoped to the TABLE: the panel for a scanned cell names its scanner too,
-      # which is correct — the bug was two ROWS for one crawl.
+      # the sources table is gone: each source is a PANEL heading, and one
+      # scanner must produce one panel however many cells it writes
       {:ok, _view, html} = at(@path)
 
-      assert count(table_of(html), "Council portal") == 1
+      assert count(html, "uppercase tracking-wide opacity-60") == 2,
+             "one heading per source, not per scanned cell"
     end
 
     test "labelled by the scanner's own origin, with the cell beneath" do
@@ -67,19 +68,22 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       assert html =~ "minutes, resolutions"
     end
 
-    test "a cadence is shown where declared, 'on demand' where not" do
+    test "a cadence is shown where declared" do
       {:ok, _view, html} = at(@path)
 
       assert html =~ "0 * * * *"
-      assert html =~ "on demand"
     end
   end
 
   describe "the hierarchy" do
-    test "structure is drawn, not implied" do
+    test "structure is drawn by indent and a collapse chevron" do
+      # the ASCII rails are gone: depth is margin, and a collapsible row carries
+      # a chevron plus a child count so a COLLAPSED row still says how much is
+      # under it
       {:ok, _view, html} = at("#{@path}/cell/expenses")
 
-      assert html =~ "├─" or html =~ "└─"
+      assert html =~ "margin-left:"
+      assert html =~ "rdd-chev"
     end
 
     test "each node names the OPERATION it performs" do
@@ -87,8 +91,8 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       # different from an edge into a reduce, and a bare arrow says neither
       {:ok, _view, html} = at("#{@path}/cell/expenses")
 
-      assert html =~ "reduce by :category"
-      assert html =~ "per_key :describe"
+      assert html =~ "reduce( folded: expenses ) by :category"
+      assert html =~ "per_key( per row: expenses ) :describe"
     end
 
     test "a converging cell says how many routes reach it" do
@@ -102,8 +106,7 @@ defmodule ReactiveDagDashboard.DagLiveTest do
 
       html = render_click(view, "direction", %{"to" => "upstream"})
 
-      assert html =~ "what feeds"
-      assert html =~ "category_health"
+      assert html =~ "category_health", "what feeds all_verdicts"
     end
   end
 
@@ -166,7 +169,9 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     end
 
     test "a node keeping its rows elsewhere is not an alarm" do
-      {:ok, _view, html} = at("#{@path}/cell/unscanned")
+      # `published` reads `unscanned` and holds no rows of its own. Upstream
+      # from it, so the panel is `published` itself.
+      {:ok, _view, html} = at("#{@path}/cell/published?direction=upstream")
 
       assert html =~ "keeps its rows elsewhere"
     end
@@ -178,6 +183,80 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     render_click(view, "select", %{"cell" => "category_health"})
 
     assert_patched(view, "#{@path}/cell/category_health")
+  end
+
+  describe "the graph view — the shape a tree cannot show" do
+    test "draws a node per cell and an edge per input" do
+      {:ok, _view, html} = at("#{@path}?view=graph")
+
+      assert html =~ "<svg"
+      assert html =~ "rdd-gbox"
+      assert html =~ "rdd-edge"
+    end
+
+    test "columns come from the graph's own depth, not a layout pass" do
+      # `Insights.levels/1` is longest-path-from-a-leaf, which IS the layered
+      # assignment — so there is no layout algorithm to get wrong
+      {:ok, _view, html} = at("#{@path}?view=graph")
+
+      # depth 0 at the left pad, depth 1 one column over
+      assert html =~ ~s|x="20"|
+      assert html =~ ~s|x="270"|
+    end
+
+    test "a converging node is drawn as a stacked card" do
+      # `all_verdicts` is read by two nodes; the stack is the same glyph the
+      # tree uses for a cell reached by several routes
+      {:ok, _view, html} = at("#{@path}?view=graph")
+
+      assert html =~ "rdd-gstack"
+    end
+
+    test "nodes are selectable from the diagram" do
+      {:ok, view, _} = at("#{@path}?view=graph")
+
+      render_click(view, "select", %{"cell" => "category_health"})
+
+      assert_patched(view, "#{@path}/cell/category_health?view=graph")
+    end
+
+    test "the view survives navigation, like direction does" do
+      {:ok, view, _} = at("#{@path}/cell/expenses?view=graph")
+
+      render_click(view, "select", %{"cell" => "category_health"})
+
+      assert_patched(view, "#{@path}/cell/category_health?view=graph")
+    end
+
+    test "and the tree is still the default" do
+      {:ok, _view, html} = at(@path)
+
+      refute html =~ "<svg"
+    end
+  end
+
+  describe "collapse — a 7-deep graph is unreadable expanded" do
+    test "rows below depth 1 start hidden" do
+      {:ok, _view, html} = at(@path)
+
+      assert html =~ ~s|class="rdd-kids hidden"|
+    end
+
+    test "a collapsible row carries its child count" do
+      # a collapsed row with no count looks like a leaf, which is the failure
+      # mode of collapsing by default
+      {:ok, _view, html} = at(@path)
+
+      assert html =~ "badge badge-ghost badge-xs"
+    end
+
+    test "expand and collapse are client-side, with no server round-trip" do
+      {:ok, _view, html} = at(@path)
+
+      assert html =~ "expand all"
+      assert html =~ "remove_class"
+      refute html =~ ~s|phx-click="expand"|
+    end
   end
 
   defp table_of(html) do
@@ -199,8 +278,8 @@ defmodule ReactiveDagDashboard.DagLiveTest do
 
       row = table_of(html)
 
-      assert row =~ ~s|phx-click="select"|
-      assert row =~ ~s|phx-value-cell="council_portal"|
+      assert html =~ ~s|phx-click="select"|
+      assert html =~ ~s|phx-value-cell="council_portal"|
     end
 
     test "every source is reachable, not only the one that sorts first" do
@@ -222,11 +301,11 @@ defmodule ReactiveDagDashboard.DagLiveTest do
 
       # asserted on the PROPERTY, not on which sink sorts first: whatever is
       # picked must have something above it, which a root never does
-      assert html =~ "├─" or html =~ "└─"
+      assert html =~ "margin-left: 1.25rem", "something is nested under something"
     end
 
     test "and a named sink shows its full depth" do
-      {:ok, _view, html} = at("#{@path}/cell/verdict_audit?direction=upstream")
+      {:ok, _view, html} = at("#{@path}/cell/verdict_audit?direction=upstream&view=tree")
 
       # verdict_audit ← all_verdicts ← category_health/spend_rollup ← expenses
       assert html =~ "all_verdicts"
@@ -237,7 +316,8 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     test "downstream still starts at a root" do
       {:ok, _view, html} = at(@path)
 
-      assert html =~ "what changes"
+      # every source gets its own panel, so a root's tree is on the page
+      assert html =~ "Finance export"
     end
   end
 
@@ -263,7 +343,6 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     test "upstream actually shows what feeds the node" do
       {:ok, _view, html} = at("#{@path}/cell/all_verdicts?direction=upstream")
 
-      assert html =~ "what feeds"
       assert html =~ "category_health"
       assert html =~ "expenses", "two levels up, so the tree really inverted"
     end
@@ -271,7 +350,7 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     test "and downstream is still the default" do
       {:ok, _view, html} = at("#{@path}/cell/expenses")
 
-      assert html =~ "what changes"
+      assert html =~ "category_health", "what expenses feeds"
     end
   end
 

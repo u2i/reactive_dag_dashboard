@@ -59,14 +59,79 @@ defmodule ReactiveDagDashboard.Algebra do
 
   def roles(cell) do
     cond do
-      j = cell[:join] -> join_roles(cell, j)
-      cell[:union] -> Map.new(cell.inputs, &{&1, "alternative"})
-      cell[:reduce] -> Map.new(cell.inputs, &{&1, "folded"})
-      cell[:per_key] -> Map.new(cell.inputs, &{&1, "per row"})
-      cell[:aggregate] -> Map.new(cell.inputs, &{&1, "counted"})
-      true -> %{}
+      j = cell[:join] ->
+        join_roles(cell, j)
+
+      # numbered, so two alternatives are distinguishable in the application:
+      # `union( feed1: a · feed2: b )` rather than two identical labels
+      cell[:union] ->
+        cell.inputs |> Enum.with_index() |> Map.new(fn {id, i} -> {id, "feed#{i + 1}"} end)
+
+      cell[:reduce] ->
+        Map.new(cell.inputs, &{&1, "folded"})
+
+      cell[:per_key] ->
+        Map.new(cell.inputs, &{&1, "per row"})
+
+      cell[:aggregate] ->
+        Map.new(cell.inputs, &{&1, "counted"})
+
+      true ->
+        %{}
     end
   end
+
+  @doc """
+  The node as a function application: `op( role: input · role: input )`.
+
+  A cell id and an operator name tell you what a node is called and what kind of
+  thing it does. They do not tell you what each INPUT is to it, which is the
+  fact that makes a graph legible: a join's left and right are not
+  interchangeable, a union's inputs are alternatives, a reduce's single input is
+  folded.
+
+      join( left: budget_rollups · right: account_totals ) on :account
+      union( feed1: category_health · feed2: spend_rollup )
+      reduce( folded: expenses ) by :category
+      per_key( per row: transcripts ) :summarise
+
+  Borrowed from an older compliance portal, which rendered its own algebra this
+  way. The roles are derived at render time from the operator and the input's
+  position — nothing is stored on the edge, and nothing about the cell changes.
+  """
+  @spec application(struct() | nil) :: String.t() | nil
+  def application(nil), do: nil
+
+  def application(cell) do
+    case {label(cell), args(cell)} do
+      {nil, _} -> nil
+      {op, ""} -> op
+      {op, args} -> "#{head(op)}( #{args} )#{tail(op)}"
+    end
+  end
+
+  # `label/1` returns "reduce by :category"; the application splits it so the
+  # qualifier trails the arguments — `reduce( folded: x ) by :category` reads as
+  # the fold it is, where `reduce by :category( folded: x )` does not.
+  defp head(label), do: label |> String.split(" ", parts: 2) |> hd()
+
+  defp tail(label) do
+    case String.split(label, " ", parts: 2) do
+      [_only] -> ""
+      [_head, rest] -> " #{rest}"
+    end
+  end
+
+  defp args(cell) do
+    roles = roles(cell)
+
+    cell
+    |> inputs()
+    |> Enum.map_join(" · ", fn input -> "#{Map.get(roles, input, "arg")}: #{input}" end)
+  end
+
+  defp inputs(%{inputs: inputs}), do: inputs
+  defp inputs(_), do: []
 
   @doc """
   The qualifier worth showing under a node — what it compares, matches, or keys

@@ -55,6 +55,7 @@ defmodule ReactiveDagDashboard.DagLive do
      socket
      |> assign(:base_path, base_path(uri, params["cell_id"]))
      |> assign(:direction, dir)
+     |> assign(:view, view(params))
      |> assign(:selected, params["cell_id"] || default_cell(socket.assigns, dir))
      |> assign_view()}
   end
@@ -70,6 +71,10 @@ defmodule ReactiveDagDashboard.DagLive do
   # nowhere else, so `handle_params` — which runs on every patch, including the
   # one `select` issues — read it back from params and reset it to downstream.
   # The toggle worked until you clicked anything.
+  def handle_event("view", %{"to" => to}, socket) do
+    {:noreply, push_patch(socket, to: path_for(socket.assigns, view: to))}
+  end
+
   def handle_event("direction", %{"to" => to}, socket) do
     {:noreply, push_patch(socket, to: path_for(socket.assigns, direction: to))}
   end
@@ -153,6 +158,8 @@ defmodule ReactiveDagDashboard.DagLive do
     |> assign(:controls, controls)
     |> assign(:sources, NodeDetail.sources(plan, controls))
     |> assign(:status, Map.new(Insights.summary(plan), &{&1.id, &1}))
+    |> assign(:levels, Insights.levels(plan))
+    |> assign(:edges, Insights.edges(plan))
     |> assign(:pending, MapSet.new(Insights.pending(plan)))
   end
 
@@ -173,6 +180,37 @@ defmodule ReactiveDagDashboard.DagLive do
     |> assign(:detail, NodeDetail.build(plan, id, socket.assigns.controls))
   end
 
+  # Which trees the page shows, and what heads each one.
+  #
+  # Downstream, that is the SOURCES — one panel per crawl, so the sources are
+  # the structure rather than a list above it, and each panel carries its own
+  # cadence and scan button.
+  #
+  # Upstream inverts the question: "what feeds this" is asked OF a cell, so the
+  # panel is the selected cell alone. Showing every sink's ancestry at once
+  # would be the same wall of nodes the sources list was.
+  defp panels(%{direction: :upstream, selected: nil}), do: []
+
+  defp panels(%{direction: :upstream, selected: id}),
+    do: [%{cell: id, title: id, every: nil, scannable?: false}]
+
+  defp panels(%{sources: sources, controls: controls}) do
+    for s <- sources do
+      %{
+        cell: s.cell,
+        title: s.origin || s.cell,
+        every: s.every,
+        scannable?: Map.has_key?(controls, s.cell)
+      }
+    end
+  end
+
+  defp rows_for(%{plan: plan, direction: :upstream}, cell_id),
+    do: plan |> Tree.upstream(cell_id) |> then(&Tree.hierarchy(plan, &1))
+
+  defp rows_for(%{plan: plan}, cell_id),
+    do: plan |> Tree.downstream(cell_id) |> then(&Tree.hierarchy(plan, &1))
+
   # With nothing named, start where a change enters — the question people
   # arrive with is almost always "what happened to X", and X came from a source.
   # Direction decides where to START. Upstream from a ROOT is one node with
@@ -185,13 +223,28 @@ defmodule ReactiveDagDashboard.DagLive do
   defp direction(%{"direction" => "upstream"}), do: :upstream
   defp direction(_), do: :downstream
 
+  # The tree answers "what does a change here reach" and repeats a cell per
+  # route; the graph answers "what is the shape of the whole thing" and draws
+  # convergence once. Two questions, two renderings of one expression.
+  defp view(%{"view" => "graph"}), do: :graph
+  defp view(_), do: :tree
+
   # One place that builds a link, so a cell change cannot drop the direction and
   # a direction change cannot drop the cell.
   defp path_for(assigns, overrides) do
     cell = Keyword.get(overrides, :cell, assigns.selected)
     dir = Keyword.get(overrides, :direction, to_string(assigns.direction))
+    view = Keyword.get(overrides, :view, to_string(assigns.view))
 
-    query = if dir == "upstream", do: "?direction=upstream", else: ""
+    query =
+      [{"direction", dir}, {"view", view}]
+      |> Enum.reject(fn {k, v} ->
+        (k == "direction" and v == "downstream") or (k == "view" and v == "tree")
+      end)
+      |> case do
+        [] -> ""
+        pairs -> "?" <> URI.encode_query(pairs)
+      end
 
     "#{assigns.base_path}cell/#{cell}#{query}"
   end
@@ -220,37 +273,61 @@ defmodule ReactiveDagDashboard.DagLive do
         <%= @message %>
       </div>
 
-      <h2 class="text-xs uppercase tracking-wide opacity-50 mb-1">sources</h2>
-      <.sources sources={@sources} status={@status} selected={@selected} />
-
-      <div class="flex items-baseline gap-3 mt-6 mb-1">
-        <h2 class="text-xs uppercase tracking-wide opacity-50">
-          <%= if @direction == :upstream, do: "what feeds", else: "what changes" %>
-        </h2>
-
-        <div class="tabs tabs-boxed tabs-xs">
-          <button
-            class={["tab", @direction == :downstream && "tab-active"]}
-            phx-click="direction"
-            phx-value-to="downstream"
-          >
-            downstream
-          </button>
-          <button
-            class={["tab", @direction == :upstream && "tab-active"]}
-            phx-click="direction"
-            phx-value-to="upstream"
-          >
-            upstream
-          </button>
-        </div>
-
-        <span class="text-xs opacity-50">
-          <%= @routes %> <%= if @routes == 1, do: "route", else: "routes" %>
-        </span>
+      <div class="tabs tabs-boxed tabs-sm w-fit mb-4">
+        <button
+          class={["tab", @view == :tree && "tab-active"]}
+          phx-click="view"
+          phx-value-to="tree"
+        >
+          expression
+        </button>
+        <button
+          class={["tab", @view == :graph && "tab-active"]}
+          phx-click="view"
+          phx-value-to="graph"
+        >
+          graph
+        </button>
       </div>
 
-      <.hierarchy rows={@rows} status={@status} selected={@selected} plan={@plan} />
+      <div :if={@view == :graph}>
+        <.graph
+          levels={@levels}
+          edges={@edges}
+          status={@status}
+          selected={@selected}
+          plan={@plan}
+        />
+      </div>
+
+      <div :if={@view == :tree}>
+        <section :for={panel <- panels(assigns)} class="mb-6">
+          <div class="flex items-baseline gap-2 mb-1">
+            <h2 class="text-xs uppercase tracking-wide opacity-60 font-semibold">
+              <%= panel.title %>
+            </h2>
+
+            <code :if={panel.every} class="text-xs opacity-40"><%= panel.every %></code>
+
+            <button
+              :if={panel.scannable?}
+              class="btn btn-xs btn-ghost ml-auto"
+              phx-click="scan"
+              phx-value-cell={panel.cell}
+              phx-value-mode="default"
+            >
+              scan
+            </button>
+          </div>
+
+          <.hierarchy
+            rows={rows_for(assigns, panel.cell)}
+            status={@status}
+            selected={@selected}
+            plan={@plan}
+          />
+        </section>
+      </div>
 
       <.detail detail={@detail} />
     </main>

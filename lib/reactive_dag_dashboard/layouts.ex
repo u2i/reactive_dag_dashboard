@@ -109,6 +109,25 @@ defmodule ReactiveDagDashboard.Layouts do
         <link :if={css_path()} phx-track-static rel="stylesheet" href={css_path()} />
         <script :if={js_path()} defer phx-track-static type="text/javascript" src={js_path()}>
         </script>
+        <style>
+          /* The SVG graph. Colours come from daisyUI's theme tokens so the
+             diagram follows the host's palette rather than fighting it — the
+             one thing that cannot be expressed in utility classes, because SVG
+             presentation attributes are not Tailwind's. */
+          .rdd-edge { stroke: currentColor; stroke-width: 1.2; opacity: .28 }
+          .rdd-edge-hot { opacity: .9; stroke-width: 2 }
+          .rdd-gbox { fill: hsl(var(--b1)); stroke: currentColor; stroke-opacity: .25; cursor: pointer }
+          .rdd-gbox:hover { stroke-opacity: .7 }
+          .rdd-gbox-on { stroke-opacity: .9; stroke-width: 2 }
+          /* a node several routes reach, drawn as a set rather than a number */
+          .rdd-gstack { fill: none; stroke: currentColor; stroke-opacity: .18 }
+          .rdd-gtext { font-size: 12px; font-weight: 500; fill: currentColor }
+          .rdd-gsub { font-size: 10px; fill: currentColor; opacity: .5;
+                      font-variant-numeric: tabular-nums }
+          /* many routes in: the tree's stacked-card glyph, as a shadow */
+          .rdd-many { box-shadow: 3px 3px 0 -1px hsl(var(--b3)), 5px 5px 0 -2px hsl(var(--b3)) }
+          .rotate-90 { transform: rotate(90deg) }
+        </style>
       </head>
       <body>
         <div :if={missing()} class="alert alert-warning m-4" role="alert">

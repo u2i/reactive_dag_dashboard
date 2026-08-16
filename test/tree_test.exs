@@ -37,13 +37,15 @@ defmodule ReactiveDagDashboard.TreeTest do
 
       # all_verdicts appears TWICE — once per route through the diamond
       assert Enum.count(ids, &(&1 == "all_verdicts")) == 2
+
       assert Enum.sort(Enum.uniq(ids)) ==
                [
                  "all_verdicts",
                  "category_health",
                  "expense_notes",
                  "expenses",
-                 "spend_rollup"
+                 "spend_rollup",
+                 "verdict_audit"
                ]
     end
 
@@ -79,7 +81,7 @@ defmodule ReactiveDagDashboard.TreeTest do
     end
 
     test "a sink has no downstream", %{plan: plan} do
-      tree = Tree.downstream(plan, "all_verdicts")
+      tree = Tree.downstream(plan, "verdict_audit")
 
       assert tree.children == []
       assert tree.via == nil
@@ -130,7 +132,7 @@ defmodule ReactiveDagDashboard.TreeTest do
     end
   end
 
-  describe "hierarchy/2 — structure kept, convergence marked" do
+  describe "hierarchy/2 — structure kept, expanded inline" do
     defp rows(plan, from), do: plan |> Tree.downstream(from) |> then(&Tree.hierarchy(plan, &1))
 
     test "the root is first, at depth 0", %{plan: plan} do
@@ -138,7 +140,6 @@ defmodule ReactiveDagDashboard.TreeTest do
 
       assert first.id == "expenses"
       assert first.depth == 0
-      refute first.ref?
     end
 
     test "children sit one level under their parent", %{plan: plan} do
@@ -149,20 +150,24 @@ defmodule ReactiveDagDashboard.TreeTest do
       assert ch.via == "expenses"
     end
 
-    test "a converging cell EXPANDS once, at its deepest route", %{plan: plan} do
-      rows = rows(plan, "expenses")
-      expanded = Enum.filter(rows, &(&1.id == "all_verdicts" and not &1.ref?))
-
-      assert length(expanded) == 1
-    end
-
-    test "and its other arrival is still drawn, as a reference", %{plan: plan} do
+    test "a converging cell is drawn under EVERY route that reaches it", %{plan: plan} do
       rows = rows(plan, "expenses")
       all = Enum.filter(rows, &(&1.id == "all_verdicts"))
 
-      # BOTH edges are visible — that is the point; one just does not re-expand
+      # both arrivals expanded: what sits under a parent is everything that
+      # parent causes, with no cross-reference to chase
       assert length(all) == 2
-      assert Enum.count(all, & &1.ref?) == 1
+      assert Enum.map(all, & &1.via) |> Enum.sort() == ["category_health", "spend_rollup"]
+    end
+
+    test "and its SUBTREE comes with it, at each arrival", %{plan: plan} do
+      # the fact that distinguishes inline expansion from expand-once:
+      # `verdict_audit` sits below the diamond's tip, so it must appear under
+      # BOTH routes to it, not once
+      rows = rows(plan, "expenses")
+
+      assert Enum.count(rows, &(&1.id == "verdict_audit")) == 2,
+             "a converging cell's children are drawn at every arrival"
     end
 
     test "a reference names every parent it is reached from", %{plan: plan} do
@@ -172,11 +177,11 @@ defmodule ReactiveDagDashboard.TreeTest do
       assert row.routes == 2
     end
 
-    test "a single-route cell is not marked as converging", %{plan: plan} do
+    test "a single-route cell reports one route", %{plan: plan} do
       row = Enum.find(rows(plan, "expenses"), &(&1.id == "category_health"))
 
       assert row.routes == 1
-      refute row.ref?
+      assert Enum.count(rows(plan, "expenses"), &(&1.id == "category_health")) == 1
     end
 
     test "last? marks the final child, for drawing the rails", %{plan: plan} do
@@ -196,7 +201,8 @@ defmodule ReactiveDagDashboard.TreeTest do
                "category_health",
                "expense_notes",
                "expenses",
-               "spend_rollup"
+               "spend_rollup",
+               "verdict_audit"
              ]
     end
 
@@ -205,7 +211,6 @@ defmodule ReactiveDagDashboard.TreeTest do
 
       assert hd(rows).id == "all_verdicts"
       assert Enum.count(rows, &(&1.id == "expenses")) == 2, "reached through both consumers"
-      assert Enum.count(rows, &(&1.id == "expenses" and not &1.ref?)) == 1
     end
   end
 
@@ -281,9 +286,9 @@ defmodule ReactiveDagDashboard.TreeTest do
       # expenses + category_health + spend_rollup + all_verdicts + expense_notes.
       # 5 cells over 3 routes: the tip is reached twice, so the exploded view
       # spends 6 rows where this spends 5.
-      assert cells == 5
+      assert cells == 6
       assert Tree.path_count(tree) == 3
-      assert tree |> Tree.flatten() |> length() == 6
+      assert tree |> Tree.flatten() |> length() == 8
     end
   end
 
@@ -348,7 +353,7 @@ defmodule ReactiveDagDashboard.TreeTest do
       # a scanned leaf nothing consumes is BOTH a root and a sink, which is not a
       # contradiction: it is where change enters and where it stops
       assert Tree.sinks(plan) ==
-               ["all_verdicts", "expense_notes", "minutes", "resolutions", "unscanned"]
+               ["expense_notes", "minutes", "resolutions", "unscanned", "verdict_audit"]
     end
   end
 

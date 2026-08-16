@@ -18,20 +18,23 @@ defmodule ReactiveDagDashboard.FixtureGraph do
   end
 
   defmodule Expenses do
-    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets, extensions: [ReactiveDag.Node]
+    use Ash.Resource,
+      domain: Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [ReactiveDag.Node]
 
     ets do
     end
 
     attributes do
-      attribute :key, :string, primary_key?: true, allow_nil?: false, public?: true
-      attribute :category, :string, public?: true
-      attribute :amount, :float, public?: true
-      attribute :fiscal_year, :string, public?: true
+      attribute(:key, :string, primary_key?: true, allow_nil?: false, public?: true)
+      attribute(:category, :string, public?: true)
+      attribute(:amount, :float, public?: true)
+      attribute(:fiscal_year, :string, public?: true)
     end
 
     actions do
-      defaults [:read, :destroy]
+      defaults([:read, :destroy])
 
       create :upsert do
         upsert?(true)
@@ -43,24 +46,31 @@ defmodule ReactiveDagDashboard.FixtureGraph do
       id(:expenses)
       leaf?(true)
       slice(:fiscal_year, values: ["FY24", "FY25"])
-      scan(ReactiveDagDashboard.FixtureGraph.ExpenseScan, args: [recent: true], every: "0 * * * *")
+
+      scan(ReactiveDagDashboard.FixtureGraph.ExpenseScan,
+        args: [recent: true],
+        every: "0 * * * *"
+      )
     end
   end
 
   # a verdict: an ordinary node with a :status column (0.17 removed `verdict? true`)
   defmodule CategoryHealth do
-    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets, extensions: [ReactiveDag.Node]
+    use Ash.Resource,
+      domain: Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [ReactiveDag.Node]
 
     ets do
     end
 
     attributes do
-      attribute :key, :string, primary_key?: true, allow_nil?: false, public?: true
-      attribute :status, :string, public?: true
+      attribute(:key, :string, primary_key?: true, allow_nil?: false, public?: true)
+      attribute(:status, :string, public?: true)
     end
 
     actions do
-      defaults [:read, :destroy]
+      defaults([:read, :destroy])
 
       create :upsert do
         upsert?(true)
@@ -72,12 +82,14 @@ defmodule ReactiveDagDashboard.FixtureGraph do
       id(:category_health)
       op(:check)
 
-      reduce over: :expenses,
-             group_by: :category,
-             into: fn _cat, rows ->
-               total = rows |> Enum.map(& &1.amount) |> Enum.sum()
-               %{status: if(total < 100.0, do: "present", else: "failing")}
-             end
+      reduce(
+        over: :expenses,
+        group_by: :category,
+        into: fn _cat, rows ->
+          total = rows |> Enum.map(& &1.amount) |> Enum.sum()
+          %{status: if(total < 100.0, do: "present", else: "failing")}
+        end
+      )
     end
   end
 
@@ -85,18 +97,21 @@ defmodule ReactiveDagDashboard.FixtureGraph do
   # real fan-out, real fan-in, and a diamond. A tree view over a graph without
   # them proves nothing about how it handles repeated paths.
   defmodule SpendRollup do
-    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets, extensions: [ReactiveDag.Node]
+    use Ash.Resource,
+      domain: Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [ReactiveDag.Node]
 
     ets do
     end
 
     attributes do
-      attribute :key, :string, primary_key?: true, allow_nil?: false, public?: true
-      attribute :status, :string, public?: true
+      attribute(:key, :string, primary_key?: true, allow_nil?: false, public?: true)
+      attribute(:status, :string, public?: true)
     end
 
     actions do
-      defaults [:read, :destroy]
+      defaults([:read, :destroy])
 
       create :upsert do
         upsert?(true)
@@ -108,30 +123,35 @@ defmodule ReactiveDagDashboard.FixtureGraph do
       id(:spend_rollup)
       op(:fold)
 
-      reduce over: :expenses,
-             group_by: :category,
-             into: fn _cat, rows ->
-               %{status: if(length(rows) > 1, do: "present", else: "thin")}
-             end
+      reduce(
+        over: :expenses,
+        group_by: :category,
+        into: fn _cat, rows ->
+          %{status: if(length(rows) > 1, do: "present", else: "thin")}
+        end
+      )
     end
   end
 
   # the diamond's tip: both consumers feed it, so it is reached by TWO paths
   # from `expenses`
   defmodule AllVerdicts do
-    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets, extensions: [ReactiveDag.Node]
+    use Ash.Resource,
+      domain: Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [ReactiveDag.Node]
 
     ets do
     end
 
     attributes do
-      attribute :check, :string, primary_key?: true, allow_nil?: false, public?: true
-      attribute :subject, :string, primary_key?: true, allow_nil?: false, public?: true
-      attribute :status, :string, public?: true
+      attribute(:check, :string, primary_key?: true, allow_nil?: false, public?: true)
+      attribute(:subject, :string, primary_key?: true, allow_nil?: false, public?: true)
+      attribute(:status, :string, public?: true)
     end
 
     actions do
-      defaults [:read, :destroy]
+      defaults([:read, :destroy])
 
       create :upsert do
         upsert?(true)
@@ -142,8 +162,43 @@ defmodule ReactiveDagDashboard.FixtureGraph do
     reactive do
       id(:all_verdicts)
 
-      union from: [:category_health, :spend_rollup],
-            into: [check: :cell, subject: :key, status: :status]
+      union(
+        from: [:category_health, :spend_rollup],
+        into: [check: :cell, subject: :key, status: :status]
+      )
+    end
+  end
+
+  # BELOW the diamond's tip — so the converging cell has a subtree, and
+  # "expanded inline" is distinguishable from "expanded once". Without this,
+  # suppressing a repeat's children removes nothing and no test can tell.
+  defmodule VerdictAudit do
+    use Ash.Resource,
+      domain: Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [ReactiveDag.Node]
+
+    ets do
+    end
+
+    attributes do
+      attribute(:key, :string, primary_key?: true, allow_nil?: false, public?: true)
+      attribute(:status, :string, public?: true)
+    end
+
+    actions do
+      defaults([:read, :destroy])
+      create(:upsert, upsert?: true, accept: [:key, :status])
+    end
+
+    reactive do
+      id(:verdict_audit)
+
+      reduce(
+        over: :all_verdicts,
+        group_by: :status,
+        into: fn status, rows -> %{key: status, status: "#{length(rows)} seen"} end
+      )
     end
   end
 
@@ -154,20 +209,23 @@ defmodule ReactiveDagDashboard.FixtureGraph do
   # changes nothing. Without a node of this shape in the fixture, the page's
   # reprocess control could be wired to a no-op and every test would still pass.
   defmodule ExpenseNotes do
-    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets, extensions: [ReactiveDag.Node]
+    use Ash.Resource,
+      domain: Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [ReactiveDag.Node]
 
     ets do
     end
 
     attributes do
-      attribute :key, :string, primary_key?: true, allow_nil?: false, public?: true
-      attribute :fiscal_year, :string, public?: true
-      attribute :note, :string, public?: true
-      attribute :fingerprint, :string, public?: true
+      attribute(:key, :string, primary_key?: true, allow_nil?: false, public?: true)
+      attribute(:fiscal_year, :string, public?: true)
+      attribute(:note, :string, public?: true)
+      attribute(:fingerprint, :string, public?: true)
     end
 
     actions do
-      defaults [:read, :destroy, update: [:note, :fingerprint, :fiscal_year]]
+      defaults([:read, :destroy, update: [:note, :fingerprint, :fiscal_year]])
 
       create :upsert do
         upsert?(true)
@@ -175,10 +233,10 @@ defmodule ReactiveDagDashboard.FixtureGraph do
       end
 
       action :describe, :map do
-        argument :amount, :float, allow_nil?: true
-        argument :fiscal_year, :string, allow_nil?: true
+        argument(:amount, :float, allow_nil?: true)
+        argument(:fiscal_year, :string, allow_nil?: true)
 
-        run fn input, _ ->
+        run(fn input, _ ->
           ReactiveDagDashboard.FixtureGraph.Notes.record(input.arguments.amount)
 
           {:ok,
@@ -186,7 +244,7 @@ defmodule ReactiveDagDashboard.FixtureGraph do
              "note" => "spent #{input.arguments.amount}",
              "fiscal_year" => input.arguments.fiscal_year
            }}
-        end
+        end)
       end
     end
 
@@ -252,18 +310,21 @@ defmodule ReactiveDagDashboard.FixtureGraph do
   # say so: reporting only the cell whose button was pressed would hide half of
   # what the scan just did.
   defmodule Minutes do
-    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets, extensions: [ReactiveDag.Node]
+    use Ash.Resource,
+      domain: Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [ReactiveDag.Node]
 
     ets do
     end
 
     attributes do
-      attribute :key, :string, primary_key?: true, allow_nil?: false, public?: true
+      attribute(:key, :string, primary_key?: true, allow_nil?: false, public?: true)
     end
 
     actions do
-      defaults [:read, :destroy]
-      create :upsert, upsert?: true, accept: [:key]
+      defaults([:read, :destroy])
+      create(:upsert, upsert?: true, accept: [:key])
     end
 
     reactive do
@@ -274,18 +335,21 @@ defmodule ReactiveDagDashboard.FixtureGraph do
   end
 
   defmodule Resolutions do
-    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets, extensions: [ReactiveDag.Node]
+    use Ash.Resource,
+      domain: Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [ReactiveDag.Node]
 
     ets do
     end
 
     attributes do
-      attribute :key, :string, primary_key?: true, allow_nil?: false, public?: true
+      attribute(:key, :string, primary_key?: true, allow_nil?: false, public?: true)
     end
 
     actions do
-      defaults [:read, :destroy]
-      create :upsert, upsert?: true, accept: [:key]
+      defaults([:read, :destroy])
+      create(:upsert, upsert?: true, accept: [:key])
     end
 
     reactive do
@@ -298,18 +362,21 @@ defmodule ReactiveDagDashboard.FixtureGraph do
   # a leaf whose keys arrive some OTHER way — a manual import, a webhook. It has
   # no scanner, and must not be grouped under one.
   defmodule Unscanned do
-    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets, extensions: [ReactiveDag.Node]
+    use Ash.Resource,
+      domain: Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [ReactiveDag.Node]
 
     ets do
     end
 
     attributes do
-      attribute :key, :string, primary_key?: true, allow_nil?: false, public?: true
+      attribute(:key, :string, primary_key?: true, allow_nil?: false, public?: true)
     end
 
     actions do
-      defaults [:read, :destroy]
-      create :upsert, upsert?: true, accept: [:key]
+      defaults([:read, :destroy])
+      create(:upsert, upsert?: true, accept: [:key])
     end
 
     reactive do
@@ -345,7 +412,8 @@ defmodule ReactiveDagDashboard.FixtureGraph do
         ExpenseNotes,
         Minutes,
         Resolutions,
-        Unscanned
+        Unscanned,
+        VerdictAudit
       ])
 
   # recompute/2 returns {:ok, changed} or {:ok, changed, meta} depending on the
@@ -355,7 +423,17 @@ defmodule ReactiveDagDashboard.FixtureGraph do
 
   @doc "Seed every cell so the page has real rows to report."
   def seed do
-    for r <- [Expenses, CategoryHealth, SpendRollup, AllVerdicts, ExpenseNotes, Minutes, Resolutions, Unscanned],
+    for r <- [
+          Expenses,
+          CategoryHealth,
+          SpendRollup,
+          AllVerdicts,
+          ExpenseNotes,
+          Minutes,
+          Resolutions,
+          Unscanned,
+          VerdictAudit
+        ],
         row <- Ash.read!(r),
         do: Ash.destroy!(row)
 
@@ -370,7 +448,8 @@ defmodule ReactiveDagDashboard.FixtureGraph do
       |> Ash.create!()
     end
 
-    for k <- ["u1"], do: Unscanned |> Ash.Changeset.for_create(:upsert, %{key: k}) |> Ash.create!()
+    for k <- ["u1"],
+        do: Unscanned |> Ash.Changeset.for_create(:upsert, %{key: k}) |> Ash.create!()
 
     for k <- ["m1"], do: Minutes |> Ash.Changeset.for_create(:upsert, %{key: k}) |> Ash.create!()
 
@@ -379,7 +458,13 @@ defmodule ReactiveDagDashboard.FixtureGraph do
 
     p = plan()
 
-    for id <- ["category_health", "spend_rollup", "all_verdicts", "expense_notes"] do
+    for id <- [
+          "category_health",
+          "spend_rollup",
+          "all_verdicts",
+          "expense_notes",
+          "verdict_audit"
+        ] do
       {:ok, _, _} = maybe_meta(ReactiveDag.Node.Recompute.recompute(p.cells[id], ["*"]))
     end
 

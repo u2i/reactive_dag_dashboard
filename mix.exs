@@ -52,12 +52,17 @@ defmodule ReactiveDagDashboard.MixProject do
 
   defp deps do
     [
-      # an rc, explicitly: this needs the drain telemetry that landed in
-      # 0.17.0-rc.6, and `~> 0.17.0-rc` would not resolve a pre-release. Bump it
-      # deliberately — 0.17 removed the coordination tuple, the tableless verdict
-      # node and the :on_step callback, and the tests here are what catch the next
-      # such change rather than a silently-tracking ref.
-      {:reactive_dag, "== 0.17.0-rc.17"},
+      # A RANGE over the rc series, not an exact pin. `~>` on a pre-release does
+      # resolve later pre-releases (Mix passes `allow_pre` for deps), so this
+      # accepts rc.19+, the 0.17.0 final and its patches, while holding 0.18 for
+      # a deliberate bump — 0.17 removed the coordination tuple, the tableless
+      # verdict node and the :on_step callback, and a major bump deserves the
+      # same scrutiny.
+      #
+      # It was `== 0.17.0-rc.N` on the belief that `~>` could not match a
+      # pre-release at all. That is not so, and the exact pin meant a PR here per
+      # library release even when nothing in this dashboard cared.
+      {:reactive_dag, "~> 0.17.0-rc.18"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

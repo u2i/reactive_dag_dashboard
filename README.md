@@ -34,15 +34,17 @@ dependency tree.
 ```elixir
 def deps do
   [
-    {:reactive_dag, "== 0.17.0-rc.6"},
+    {:reactive_dag, "~> 0.17.0-rc.18"},
     {:reactive_dag_dashboard, "~> 0.1"}
   ]
 end
 ```
 
-The `reactive_dag` requirement is pinned to a release candidate, not a range:
-this dashboard needs the drain telemetry that landed in rc.6, and `~> 0.17.0-rc`
-does not resolve pre-releases. It relaxes to `~> 0.17` once 0.17.0 is final.
+The `reactive_dag` requirement is a range over the 0.17 rc series. `~>` on a
+pre-release does resolve later pre-releases, so this tracks rc.19+ and the 0.17.0
+final without a bump here, while holding 0.18 for a deliberate one. The floor is
+rc.18 because that is where the drain step gained `op`/`depth`; the dashboard
+needs the drain telemetry that landed back in rc.6.
 
 Mount it in your router, **inside whatever pipeline already authenticates your
 admins** — this package ships no auth of its own, by design:

@@ -100,27 +100,6 @@ defmodule ReactiveDagDashboard.Components do
   """
   def hierarchy(assigns) do
     ~H"""
-    <div class="flex items-center gap-2 mb-1">
-      <button
-        type="button"
-        class="btn btn-ghost btn-xs"
-        phx-click={
-          JS.remove_class("hidden", to: ".rdd-kids") |> JS.add_class("rotate-90", to: ".rdd-chev")
-        }
-      >
-        expand all
-      </button>
-      <button
-        type="button"
-        class="btn btn-ghost btn-xs"
-        phx-click={
-          JS.add_class("hidden", to: ".rdd-kids") |> JS.remove_class("rotate-90", to: ".rdd-chev")
-        }
-      >
-        collapse
-      </button>
-    </div>
-
     <ul class="menu menu-sm w-full p-0 gap-0">
       <li :for={row <- @rows} id={"row-#{row.path}"} class={["rdd-kids", row.depth > 1 && "hidden"]}>
         <div
@@ -148,10 +127,23 @@ defmodule ReactiveDagDashboard.Components do
             <%= row.children %>
           </span>
 
-          <code :if={application(row)} class="text-xs opacity-70"><%= application(row) %></code>
+          <code :if={application(row)} class="text-xs opacity-70 min-w-0 break-all">
+            <%= application(row) %>
+          </code>
 
-          <span :if={row.routes > 1} class="badge badge-outline badge-xs">
+          <span
+            :if={row.routes > 1 and not row.repeat?}
+            class="badge badge-outline badge-xs shrink-0"
+          >
             <%= row.routes %> routes
+          </span>
+
+          <span
+            :if={row.repeat?}
+            class="badge badge-ghost badge-xs shrink-0 italic"
+            title="expanded under its other input"
+          >
+            also here
           </span>
 
           <span
@@ -161,7 +153,10 @@ defmodule ReactiveDagDashboard.Components do
             <%= status %> <%= n %>
           </span>
 
-          <span class="text-xs opacity-50 tabular-nums ml-auto" title={count_title(@status[row.id])}>
+          <span
+            class="text-xs opacity-50 tabular-nums ml-auto pl-3 shrink-0"
+            title={count_title(@status[row.id])}
+          >
             <%= key_count(@status[row.id]) %>
           </span>
         </div>

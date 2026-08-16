@@ -42,6 +42,15 @@ defmodule ReactiveDagDashboard.ScanControlTest do
     :ok
   end
 
+  # The status line only. Cell ids appear throughout the page, so matching the
+  # whole document would pass on text that has nothing to do with the message.
+  defp scan_message(html) do
+    case Regex.run(~r/<p class="rdd-scan-result"[^>]*>(.*?)<\/p>/s, html) do
+      [_, msg] -> msg
+      nil -> ""
+    end
+  end
+
   defp drawer(cell_id) do
     {:ok, view, _} = live(build_conn(), @path)
     {view, render_patch(view, "#{@path}/cell/#{cell_id}")}
@@ -160,6 +169,44 @@ defmodule ReactiveDagDashboard.ScanControlTest do
 
       assert html =~ "scanned expenses"
       refute html =~ "unreachable"
+    end
+  end
+
+  describe "a scanner feeding several leaves" do
+    # One crawl of one upstream whose rows land in two cells. `refresh/3` marks
+    # both from a single poll, so a message naming only the button's cell hides
+    # half of what the scan just did — and the other half is where a reader
+    # would go looking when a number surprises them.
+    test "the message names every leaf the poll marked" do
+      {view, _} = drawer("minutes")
+
+      html = render_click(view, "scan", %{"cell" => "minutes", "mode" => "default"})
+
+      # both cells appear all over the page — in the graph, in the tree — so
+      # `html =~ "resolutions"` proves nothing. Assert on the MESSAGE.
+      assert html =~ "across 2 leaves"
+      assert scan_message(html) =~ "resolutions", "the second leaf this one poll also marked"
+    end
+
+    test "and says how many keys each got" do
+      {view, _} = drawer("minutes")
+
+      html = render_click(view, "scan", %{"cell" => "minutes", "mode" => "default"})
+
+      # 1 for minutes, 2 for resolutions — a single total would read as 3 keys
+      # in the cell you were looking at
+      assert html =~ "minutes 1"
+      assert html =~ "resolutions 2"
+    end
+
+    test "a single-leaf scan still reads as one cell" do
+      # the common case must not acquire a leaf breakdown it does not need
+      {view, _} = drawer("expenses")
+
+      html = render_click(view, "scan", %{"cell" => "expenses", "mode" => "default"})
+
+      assert scan_message(html) =~ "scanned expenses"
+      refute scan_message(html) =~ "across"
     end
   end
 

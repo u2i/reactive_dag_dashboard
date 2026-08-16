@@ -247,10 +247,82 @@ defmodule ReactiveDagDashboard.FixtureGraph do
     end
   end
 
+  # A source feeding TWO leaves — one crawl of one upstream whose rows land in
+  # two places. `refresh/3` marks both from a single poll, and the page has to
+  # say so: reporting only the cell whose button was pressed would hide half of
+  # what the scan just did.
+  defmodule Minutes do
+    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets, extensions: [ReactiveDag.Node]
+
+    ets do
+    end
+
+    attributes do
+      attribute :key, :string, primary_key?: true, allow_nil?: false, public?: true
+    end
+
+    actions do
+      defaults [:read, :destroy]
+      create :upsert, upsert?: true, accept: [:key]
+    end
+
+    reactive do
+      id(:minutes)
+      leaf?(true)
+      scan(ReactiveDagDashboard.FixtureGraph.CouncilScan)
+    end
+  end
+
+  defmodule Resolutions do
+    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets, extensions: [ReactiveDag.Node]
+
+    ets do
+    end
+
+    attributes do
+      attribute :key, :string, primary_key?: true, allow_nil?: false, public?: true
+    end
+
+    actions do
+      defaults [:read, :destroy]
+      create :upsert, upsert?: true, accept: [:key]
+    end
+
+    reactive do
+      id(:resolutions)
+      leaf?(true)
+      scan(ReactiveDagDashboard.FixtureGraph.CouncilScan)
+    end
+  end
+
+  defmodule CouncilScan do
+    @behaviour ReactiveDag.Source
+
+    @impl true
+    def id, do: :council_scan
+    @impl true
+    def leaf_cells(_g), do: ["minutes", "resolutions"]
+    @impl true
+    def origin, do: %{label: "Council portal"}
+    @impl true
+    def poll(_opts) do
+      # keyed BY LEAF: one poll, rows for two cells
+      {:ok, %{changed: %{"minutes" => ["m1"], "resolutions" => ["r1", "r2"]}}}
+    end
+  end
+
   @doc "The plan, as the router's `:plan` MFA would return it."
   def plan,
     do:
-      ReactiveDag.Node.graph([Expenses, CategoryHealth, SpendRollup, AllVerdicts, ExpenseNotes])
+      ReactiveDag.Node.graph([
+        Expenses,
+        CategoryHealth,
+        SpendRollup,
+        AllVerdicts,
+        ExpenseNotes,
+        Minutes,
+        Resolutions
+      ])
 
   # recompute/2 returns {:ok, changed} or {:ok, changed, meta} depending on the
   # node shape; normalise so the seed does not care which.
@@ -259,7 +331,7 @@ defmodule ReactiveDagDashboard.FixtureGraph do
 
   @doc "Seed every cell so the page has real rows to report."
   def seed do
-    for r <- [Expenses, CategoryHealth, SpendRollup, AllVerdicts, ExpenseNotes],
+    for r <- [Expenses, CategoryHealth, SpendRollup, AllVerdicts, ExpenseNotes, Minutes, Resolutions],
         row <- Ash.read!(r),
         do: Ash.destroy!(row)
 
@@ -273,6 +345,11 @@ defmodule ReactiveDagDashboard.FixtureGraph do
       })
       |> Ash.create!()
     end
+
+    for k <- ["m1"], do: Minutes |> Ash.Changeset.for_create(:upsert, %{key: k}) |> Ash.create!()
+
+    for k <- ["r1", "r2"],
+        do: Resolutions |> Ash.Changeset.for_create(:upsert, %{key: k}) |> Ash.create!()
 
     p = plan()
 

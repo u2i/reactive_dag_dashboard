@@ -124,11 +124,13 @@ defmodule ReactiveDagDashboard.TreeTest do
 
   describe "roots and sinks" do
     test "roots/1 finds the cells a change starts from", %{plan: plan} do
-      assert Tree.roots(plan) == ["expenses"]
+      assert Tree.roots(plan) == ["expenses", "minutes", "resolutions"]
     end
 
     test "sinks/1 finds the cells nothing consumes", %{plan: plan} do
-      assert Tree.sinks(plan) == ["all_verdicts", "expense_notes"]
+      # a scanned leaf nothing consumes is BOTH a root and a sink, which is not a
+      # contradiction: it is where change enters and where it stops
+      assert Tree.sinks(plan) == ["all_verdicts", "expense_notes", "minutes", "resolutions"]
     end
   end
 

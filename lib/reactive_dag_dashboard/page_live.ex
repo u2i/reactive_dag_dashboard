@@ -32,7 +32,7 @@ defmodule ReactiveDagDashboard.PageLive do
   """
   use Phoenix.LiveView
 
-  alias ReactiveDag.{Insights, Source}
+  alias ReactiveDag.Insights
 
   alias ReactiveDagDashboard.LiveUpdates
 
@@ -71,37 +71,100 @@ defmodule ReactiveDagDashboard.PageLive do
     |> then(&if String.ends_with?(&1, "/"), do: &1, else: &1 <> "/")
   end
 
-  # Running a scanner is the one thing this page DOES rather than displays. It
-  # stays a host-triggered action — the library exposes `poll_cell/3` and the
-  # page calls it — so nothing here decides when a scan should happen, only that
-  # someone asked for one now.
+  # Running a scanner is the one thing this page DOES rather than displays.
+  #
+  # It ENQUEUES rather than polls inline, for two reasons. A crawl can take
+  # minutes, and a synchronous poll would block this LiveView process — the page
+  # would appear hung to the person who pressed the button. And a poll that only
+  # writes rows is half the job: `ReactiveDag.ScanWorker` marks the frontier and
+  # drains, so the change actually reaches everything downstream.
+  #
+  # The result arrives the way every other change does: the worker's drain emits
+  # telemetry, the observer rebroadcasts it, and this page re-reads the cells that
+  # moved. There is nothing to poll for here.
   @impl true
   def handle_event("scan", %{"cell" => cell_id, "mode" => mode}, socket) do
-    opts = scan_opts(mode, socket.assigns.controls[cell_id])
+    {message, reload?} =
+      case enqueue_scan(cell_id, mode, socket.assigns) do
+        :queued ->
+          {"scan of #{cell_id} queued — results will appear as it drains", false}
 
-    result =
-      case Source.poll_cell(socket.assigns.plan, cell_id, opts) do
-        {:ok, %{changed: changed} = res} ->
-          unreachable = Map.get(res, :unreachable, [])
+        {:ran, %{changed: changed, unreachable: []}} ->
+          {"scanned #{cell_id}: #{length(changed)} key(s) changed", true}
 
-          # An outage is not a quiet success. A scan that could not look must not
-          # render as a scan that found nothing — the honest gap, on screen.
-          if unreachable == [] do
-            "scanned #{cell_id}: #{length(changed)} key(s) changed"
-          else
-            "scanned #{cell_id}: #{length(changed)} changed, " <>
-              "#{length(unreachable)} upstream(s) unreachable — results are incomplete"
-          end
+        # An outage is not a quiet success. A scan that could not look must not
+        # render as a scan that found nothing — the honest gap, on screen.
+        {:ran, %{changed: changed, unreachable: up}} ->
+          {"scanned #{cell_id}: #{length(changed)} changed, #{length(up)} upstream(s) " <>
+             "unreachable — results are incomplete", true}
 
-        {:error, :no_scanner} ->
-          "#{cell_id} has no scanner"
+        :no_scanner ->
+          {"#{cell_id} has no scanner", false}
 
         {:error, reason} ->
-          "scan failed: #{inspect(reason)}"
+          {"scan failed: #{inspect(reason)}", false}
       end
 
-    {:noreply, socket |> assign(:scan_result, result) |> load()}
+    socket = assign(socket, :scan_result, message)
+    {:noreply, if(reload?, do: load(socket), else: socket)}
   end
+
+  defp enqueue_scan(cell_id, mode, assigns) do
+    case assigns.controls[cell_id] do
+      nil ->
+        :no_scanner
+
+      control ->
+        run_scan(cell_id, scan_opts(mode, control), assigns)
+    end
+  end
+
+  # Queue it when the library's worker is available — a crawl can take minutes,
+  # and a synchronous poll would block this LiveView process, so the page would
+  # look hung to whoever pressed the button.
+  #
+  # Without Oban (the library's dependency on it is optional, and a host may run
+  # this dashboard purely for display) fall back to running it here. Slower and
+  # blocking, but correct: `refresh/3` marks the frontier either way, which is
+  # the part that makes a scan reach anything downstream.
+  defp run_scan(cell_id, opts, assigns) do
+    if Code.ensure_loaded?(ReactiveDag.ScanWorker) and oban_running?() do
+      %{"cell" => cell_id}
+      |> put_opts(opts)
+      |> put_plan(assigns.plan_mfa)
+      |> ReactiveDag.ScanWorker.new()
+      |> Oban.insert()
+      |> case do
+        {:ok, _job} -> :queued
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      inline_scan(assigns.plan, cell_id, opts)
+    end
+  end
+
+  defp inline_scan(plan, cell_id, opts) do
+    case ReactiveDag.Source.refresh(plan, cell_id, opts) do
+      {:ok, result} -> {:ran, result}
+      {:error, :no_scanner} -> :no_scanner
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp oban_running? do
+    is_pid(Process.whereis(Oban))
+  rescue
+    _ -> false
+  end
+
+  defp put_opts(args, []), do: args
+  defp put_opts(args, opts), do: Map.put(args, "opts", Map.new(opts, fn {k, v} -> {to_string(k), v} end))
+
+  # The worker builds the plan itself — a job argument cannot carry one — so it
+  # is told the same MFA this page was given, rather than relying on the host
+  # having also set `config :reactive_dag, plan_mfa:`.
+  defp put_plan(args, {m, f, a}),
+    do: Map.put(args, "plan_mfa", [to_string(m), to_string(f), a])
 
   defp scan_opts("full", control), do: full_scan_opts(control)
   defp scan_opts(_default, _control), do: []

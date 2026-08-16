@@ -57,10 +57,15 @@ defmodule ReactiveDagDashboard.MixProject do
       # deliberately — 0.17 removed the coordination tuple, the tableless verdict
       # node and the :on_step callback, and the tests here are what catch the next
       # such change rather than a silently-tracking ref.
-      {:reactive_dag, "== 0.17.0-rc.9"},
+      {:reactive_dag, "== 0.17.0-rc.10"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},
+      # Optional, and only for the scan button: with Oban the page queues a scan
+      # (a crawl can take minutes, and blocking the LiveView would look hung);
+      # without it, the scan runs inline. A host running this dashboard purely
+      # for display needs neither.
+      {:oban, "~> 2.17", optional: true},
       {:jason, "~> 1.4"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:lazy_html, ">= 0.1.0", only: :test}

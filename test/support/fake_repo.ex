@@ -9,6 +9,9 @@ defmodule ReactiveDagDashboard.FakeRepo do
 
   def start_link, do: Agent.start_link(fn -> MapSet.new() end, name: __MODULE__)
 
+  @doc "The `{cell, key}` pairs currently marked dirty."
+  def marks, do: Agent.get(__MODULE__, &MapSet.to_list/1) |> Enum.sort()
+
   def query!("INSERT INTO " <> _, params) do
     params
     |> Enum.chunk_every(5)

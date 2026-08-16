@@ -72,6 +72,18 @@ defmodule ReactiveDagDashboard.ScanControlTest do
   end
 
   describe "running it" do
+    test "a scan MARKS the frontier, so the change reaches downstream" do
+      # the bug this replaced: the page called `poll_cell/3`, which writes rows
+      # and marks nothing — so a scan from the UI changed the leaf and never
+      # recomputed anything above it
+      {view, _} = drawer("expenses")
+
+      render_click(view, "scan", %{"cell" => "expenses", "mode" => "default"})
+
+      assert Enum.any?(ReactiveDagDashboard.FakeRepo.marks(), fn {cell, _} -> cell == "expenses" end),
+             "a scan that marks nothing recomputes nothing"
+    end
+
     test "the default button polls with the leaf's declared args" do
       {view, _} = drawer("expenses")
 
@@ -96,7 +108,7 @@ defmodule ReactiveDagDashboard.ScanControlTest do
       html = render_click(view, "scan", %{"cell" => "expenses", "mode" => "default"})
 
       assert html =~ "scanned expenses"
-      assert html =~ "0 key(s) changed"
+      assert html =~ "1 key(s) changed"
     end
 
     test "a cell with no scanner says so rather than failing" do

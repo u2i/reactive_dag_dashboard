@@ -98,6 +98,43 @@ defmodule ReactiveDagDashboard.Tree do
   end
 
   @doc """
+  The roots grouped by the SCANNER that feeds them.
+
+  A source can feed several leaves — one crawl of one site whose rows land in two
+  cells — and the picker listing them side by side says nothing about that, so
+  two halves of one crawl read as two independent sources.
+
+  The pairing is a fact of the graph (`scan` on the leaf, verified at assembly
+  against the scanner's own `leaf_cells/1`), so this is a `group_by` rather than
+  a guess. Returns `{origin, scanner, [root_id]}` sorted by label, with unscanned
+  roots last under `nil` — a leaf whose keys arrive some other way is not
+  mis-grouped, it is simply not part of a crawl.
+
+  `origin` is the scanner's own `origin/0` label where it offers one, so the
+  group reads as *"City agenda center"* rather than as a module name.
+  """
+  @spec roots_by_scanner(Plan.t()) :: [{String.t() | nil, module() | nil, [String.t()]}]
+  def roots_by_scanner(%Plan{cells: cells} = plan) do
+    plan
+    |> roots()
+    |> Enum.group_by(&cells[&1].meta[:scan])
+    |> Enum.map(fn {scanner, ids} -> {origin_label(scanner), scanner, Enum.sort(ids)} end)
+    |> Enum.sort_by(fn {label, scanner, _ids} -> {is_nil(scanner), label || ""} end)
+  end
+
+  defp origin_label(nil), do: nil
+
+  defp origin_label(mod) do
+    with true <- Code.ensure_loaded?(mod),
+         true <- function_exported?(mod, :origin, 0),
+         %{label: label} <- mod.origin() do
+      label
+    else
+      _ -> mod |> Module.split() |> List.last()
+    end
+  end
+
+  @doc """
   Every cell nothing consumes — the roots of the upstream view, and the tables a
   host actually queries.
   """

@@ -37,6 +37,7 @@ defmodule ReactiveDagDashboard.NodeDetail do
           inputs: [String.t()],
           outputs: [String.t()],
           scanner: map() | nil,
+          slices: [map()],
           steps: [map()],
           last_run: DateTime.t() | nil
         }
@@ -65,6 +66,9 @@ defmodule ReactiveDagDashboard.NodeDetail do
           inputs: cell.inputs,
           outputs: Map.get(plan.parents, cell_id, []) |> Enum.sort(),
           scanner: controls[cell_id],
+          # what a human may select this node by — the unit a PERSON picks,
+          # which is rarely the unit a change invalidates
+          slices: ReactiveDag.Node.Rows.slices(cell),
           steps: steps,
           last_run: steps |> List.first() |> then(&(&1 && &1.at))
         }

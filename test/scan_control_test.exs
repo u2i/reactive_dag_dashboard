@@ -45,15 +45,16 @@ defmodule ReactiveDagDashboard.ScanControlTest do
   # The status line only. Cell ids appear throughout the page, so matching the
   # whole document would pass on text that has nothing to do with the message.
   defp scan_message(html) do
-    case Regex.run(~r/<p class="rdd-scan-result"[^>]*>(.*?)<\/p>/s, html) do
+    case Regex.run(~r/<div class="alert alert-info[^"]*"[^>]*>(.*?)<\/div>/s, html) do
       [_, msg] -> msg
       nil -> ""
     end
   end
 
+  # the page is one view now: a cell is a route, not a drawer over an index
   defp drawer(cell_id) do
-    {:ok, view, _} = live(build_conn(), @path)
-    {view, render_patch(view, "#{@path}/cell/#{cell_id}")}
+    {:ok, view, html} = live(build_conn(), "#{@path}/cell/#{cell_id}")
+    {view, html}
   end
 
   describe "what gets a control" do
@@ -89,7 +90,9 @@ defmodule ReactiveDagDashboard.ScanControlTest do
 
       render_click(view, "scan", %{"cell" => "expenses", "mode" => "default"})
 
-      assert Enum.any?(ReactiveDagDashboard.FakeRepo.marks(), fn {cell, _} -> cell == "expenses" end),
+      assert Enum.any?(ReactiveDagDashboard.FakeRepo.marks(), fn {cell, _} ->
+               cell == "expenses"
+             end),
              "a scan that marks nothing recomputes nothing"
     end
 
@@ -347,7 +350,12 @@ defmodule ReactiveDagDashboard.ScanControlTest do
       on_exit(fn -> :telemetry.detach("reprocess-drain") end)
 
       {view, _} = drawer("expenses")
-      render_click(view, "reprocess", %{"cell" => "expenses", "column" => "fiscal_year", "value" => "FY25"})
+
+      render_click(view, "reprocess", %{
+        "cell" => "expenses",
+        "column" => "fiscal_year",
+        "value" => "FY25"
+      })
 
       assert_received {:step, "expenses"}
       assert_received {:step, "category_health"}

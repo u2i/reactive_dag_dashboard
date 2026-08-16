@@ -21,6 +21,14 @@ defmodule ReactiveDagDashboard.TreeTest do
     {:ok, plan: FixtureGraph.plan()}
   end
 
+  defp find(plan, from, id) do
+    plan
+    |> Tree.downstream(from)
+    |> then(&Tree.levels(plan, &1))
+    |> Enum.flat_map(&elem(&1, 1))
+    |> Enum.find(&(&1.id == id))
+  end
+
   describe "downstream — where a change goes" do
     test "expands every path, repeating the shared cell", %{plan: plan} do
       tree = Tree.downstream(plan, "expenses")
@@ -119,6 +127,84 @@ defmodule ReactiveDagDashboard.TreeTest do
 
       assert tree.depth == 0
       assert Enum.map(tree.children, & &1.depth) == [1]
+    end
+  end
+
+  describe "levels/2 — one row per cell, for following a source" do
+    test "a cell reached twice appears ONCE", %{plan: plan} do
+      rows =
+        plan
+        |> Tree.downstream("expenses")
+        |> then(&Tree.levels(plan, &1))
+        |> Enum.flat_map(&elem(&1, 1))
+
+      ids = Enum.map(rows, & &1.id)
+
+      assert Enum.count(ids, &(&1 == "all_verdicts")) == 1
+      assert length(ids) == length(Enum.uniq(ids)), "no cell renders twice"
+    end
+
+    test "and names every edge it arrives by", %{plan: plan} do
+      # this is the fact the exploded view spent two rows on, and the reason
+      # convergence was invisible: the tip is reached from BOTH consumers
+      row = find(plan, "expenses", "all_verdicts")
+
+      assert row.via == ["category_health", "spend_rollup"]
+      assert row.routes == 2
+    end
+
+    test "a cell on one route names one edge", %{plan: plan} do
+      row = find(plan, "expenses", "category_health")
+
+      assert row.via == ["expenses"]
+      assert row.routes == 1
+    end
+
+    test "distance is the FURTHEST route, so nothing sits above its input", %{plan: plan} do
+      levels = plan |> Tree.downstream("expenses") |> then(&Tree.levels(plan, &1))
+
+      at = fn id ->
+        Enum.find_value(levels, fn {d, rows} -> if Enum.any?(rows, &(&1.id == id)), do: d end)
+      end
+
+      assert at.("expenses") == 0
+      assert at.("category_health") == 1
+      # reachable at depth 2 via either consumer — never at 1
+      assert at.("all_verdicts") == 2
+      assert at.("all_verdicts") > at.("spend_rollup")
+    end
+
+    test "rows come back grouped and ordered by distance", %{plan: plan} do
+      levels = plan |> Tree.downstream("expenses") |> then(&Tree.levels(plan, &1))
+
+      assert Enum.map(levels, &elem(&1, 0)) == Enum.sort(Enum.map(levels, &elem(&1, 0)))
+      assert [{0, [%{id: "expenses"}]} | _] = levels
+    end
+
+    test "it works upstream too — what feeds this, collapsed", %{plan: plan} do
+      rows =
+        plan
+        |> Tree.upstream("all_verdicts")
+        |> then(&Tree.levels(plan, &1))
+        |> Enum.flat_map(&elem(&1, 1))
+
+      expenses = Enum.find(rows, &(&1.id == "expenses"))
+
+      assert expenses.routes == 2, "reached through both consumers"
+      assert expenses.via == ["category_health", "spend_rollup"]
+    end
+
+    test "the collapsed count is cells, not paths", %{plan: plan} do
+      tree = Tree.downstream(plan, "expenses")
+
+      cells = tree |> then(&Tree.levels(plan, &1)) |> Enum.flat_map(&elem(&1, 1)) |> length()
+
+      # expenses + category_health + spend_rollup + all_verdicts + expense_notes.
+      # 5 cells over 3 routes: the tip is reached twice, so the exploded view
+      # spends 6 rows where this spends 5.
+      assert cells == 5
+      assert Tree.path_count(tree) == 3
+      assert tree |> Tree.flatten() |> length() == 6
     end
   end
 

@@ -12,7 +12,10 @@ defmodule ReactiveDagDashboard.NodeDetailTest do
   alias ReactiveDagDashboard.{FixtureGraph, NodeDetail}
 
   setup do
-    start_supervised!(%{id: FixtureGraph.ExpenseScan, start: {FixtureGraph.ExpenseScan, :start_link, []}})
+    start_supervised!(%{
+      id: FixtureGraph.ExpenseScan,
+      start: {FixtureGraph.ExpenseScan, :start_link, []}
+    })
 
     start_supervised!(%{
       id: ReactiveDagDashboard.FakeRepo,
@@ -100,6 +103,51 @@ defmodule ReactiveDagDashboard.NodeDetailTest do
 
       assert detail.steps == []
       refute detail.last_run
+    end
+  end
+
+  describe "sources/2 — one row per scanner" do
+    test "a scanner appears ONCE, however many cells it writes" do
+      # the duplicate-heading bug: a source feeding two leaves printed its
+      # origin twice, once above each cell, reading as two independent sources
+      # of the same name
+      controls = ReactiveDag.Source.controls(plan())
+      sources = NodeDetail.sources(plan(), controls)
+
+      names = Enum.map(sources, & &1.module)
+      assert names == Enum.uniq(names)
+    end
+
+    test "and carries what it feeds, so the reach is visible" do
+      controls = ReactiveDag.Source.controls(plan())
+
+      council =
+        NodeDetail.sources(plan(), controls)
+        |> Enum.find(&(&1.module == FixtureGraph.CouncilScan))
+
+      assert "minutes" in council.feeds
+      assert "resolutions" in council.feeds
+    end
+
+    test "labelled by the scanner's own origin where it offers one" do
+      controls = ReactiveDag.Source.controls(plan())
+
+      council =
+        NodeDetail.sources(plan(), controls)
+        |> Enum.find(&(&1.module == FixtureGraph.CouncilScan))
+
+      assert council.origin == "Council portal"
+      assert council.every == nil
+    end
+
+    test "a cadence is carried, for the column that compares them" do
+      controls = ReactiveDag.Source.controls(plan())
+
+      expenses =
+        NodeDetail.sources(plan(), controls)
+        |> Enum.find(&(&1.module == FixtureGraph.ExpenseScan))
+
+      assert expenses.every == "0 * * * *"
     end
   end
 

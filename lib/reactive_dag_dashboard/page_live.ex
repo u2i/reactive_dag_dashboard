@@ -89,13 +89,13 @@ defmodule ReactiveDagDashboard.PageLive do
         :queued ->
           {"scan of #{cell_id} queued — results will appear as it drains", false}
 
-        {:ran, %{changed: changed, unreachable: []}} ->
-          {"scanned #{cell_id}: #{length(changed)} key(s) changed", true}
+        {:ran, %{unreachable: []} = result} ->
+          {"scanned #{cell_id}: #{summarise(result)}", true}
 
         # An outage is not a quiet success. A scan that could not look must not
         # render as a scan that found nothing — the honest gap, on screen.
-        {:ran, %{changed: changed, unreachable: up}} ->
-          {"scanned #{cell_id}: #{length(changed)} changed, #{length(up)} upstream(s) " <>
+        {:ran, %{unreachable: up} = result} ->
+          {"scanned #{cell_id}: #{summarise(result)}, #{length(up)} upstream(s) " <>
              "unreachable — results are incomplete", true}
 
         :no_scanner ->
@@ -107,6 +107,26 @@ defmodule ReactiveDagDashboard.PageLive do
 
     socket = assign(socket, :scan_result, message)
     {:noreply, if(reload?, do: load(socket), else: socket)}
+  end
+
+  # Reprocessing is the second thing this page DOES. Same split as the scan: the
+  # library owns what it means, the page owns that someone asked for it now.
+  @impl true
+  def handle_event("reprocess", %{"cell" => cell_id} = params, socket) do
+    args =
+      %{"cell" => cell_id, "reason" => "dashboard"}
+      |> put_where(params)
+      |> put_plan(socket.assigns.plan_mfa)
+
+    message =
+      case run_reprocess(args, socket.assigns.plan, cell_id, params) do
+        :queued -> "reprocess of #{describe(cell_id, params)} queued"
+        {:ran, m} -> "reprocessed #{describe(cell_id, params)}: #{outcome(m)}"
+        :nothing_selected -> "nothing to reprocess in #{describe(cell_id, params)}"
+        {:error, reason} -> "reprocess failed: #{inspect(reason)}"
+      end
+
+    {:noreply, socket |> assign(:scan_result, message) |> load()}
   end
 
   defp enqueue_scan(cell_id, mode, assigns) do
@@ -165,6 +185,111 @@ defmodule ReactiveDagDashboard.PageLive do
   # having also set `config :reactive_dag, plan_mfa:`.
   defp put_plan(args, {m, f, a}),
     do: Map.put(args, "plan_mfa", [to_string(m), to_string(f), a])
+
+  # `detail` says WHY each key changed, which is the difference between "4 keys
+  # changed" and "2 new, 1 updated, 1 withdrawn". A scanner only has it if it
+  # reconciles through the library and passes it back, so fall back to the count.
+  defp summarise(%{detail: %{} = d}) do
+    case Enum.reject(
+           [
+             {length(d.created), "new"},
+             {length(d.updated), "updated"},
+             {length(d.revived), "returned"},
+             {length(d.retired), "withdrawn"}
+           ],
+           fn {n, _} -> n == 0 end
+         ) do
+      [] -> "nothing changed"
+      parts -> Enum.map_join(parts, ", ", fn {n, label} -> "#{n} #{label}" end)
+    end
+  end
+
+  defp summarise(%{changed: changed}), do: "#{length(changed)} key(s) changed"
+
+  defp put_where(args, %{"column" => c, "value" => v}), do: Map.put(args, "where", %{c => v})
+  defp put_where(args, _params), do: args
+
+  defp describe(cell_id, %{"column" => c, "value" => v}), do: "#{cell_id} (#{c} = #{v})"
+  defp describe(cell_id, _params), do: "#{cell_id} (whole cell)"
+
+  # `changed` alone cannot distinguish "nothing needed redoing" from "the request
+  # never reached the rows". Saying how many were freed to re-run alongside how
+  # many moved makes a genuine no-op readable as one.
+  defp outcome(%{changed: changed} = m) do
+    case m[:invalidated] do
+      n when is_integer(n) and n > 0 -> "#{n} re-run, #{changed} changed"
+      _ -> "#{changed} changed"
+    end
+  end
+
+  defp outcome(_), do: "done"
+
+  # Queue it when Oban is there — a reprocess can drain a large subtree, and
+  # blocking the LiveView on it would look hung.
+  #
+  # Without Oban, run the SAME worker inline rather than re-deriving what it
+  # does. That is not just less code: a reprocess has to clear the stored
+  # fingerprint before marking, or a `per_key` node skips the very rows it was
+  # asked to redo. This page reimplemented the marking once and silently missed
+  # that step — the button worked and nothing happened. A second copy of a rule
+  # this subtle is a copy that will drift again.
+  defp run_reprocess(args, _plan, _cell_id, _params) do
+    cond do
+      not Code.ensure_loaded?(ReactiveDag.ReprocessWorker) ->
+        {:error, :reprocess_worker_unavailable}
+
+      oban_running?() ->
+        case args |> ReactiveDag.ReprocessWorker.new() |> Oban.insert() do
+          {:ok, _job} -> :queued
+          {:error, reason} -> {:error, reason}
+        end
+
+      true ->
+        inline_reprocess(args)
+    end
+  end
+
+  # `perform/1` takes the job it would have been given. An inline run is
+  # synchronous, so listen to the worker's own telemetry for the duration and
+  # report what it measured rather than re-counting it here.
+  defp inline_reprocess(args) do
+    handler = "reactive-dag-dashboard-reprocess-#{inspect(self())}"
+    test_pid = self()
+
+    :telemetry.attach(
+      handler,
+      [:reactive_dag, :reprocess, :stop],
+      fn _e, measurements, _meta, _ -> send(test_pid, {:reprocess_stop, measurements}) end,
+      nil
+    )
+
+    try do
+      # `perform/1` returns `:ok` even for a cell absent from the plan — it logs
+      # and declines rather than failing a job that would fail identically on
+      # every retry. So the telemetry, not the return value, is what says
+      # whether anything happened; no event means nothing was selected.
+      :ok = ReactiveDag.ReprocessWorker.perform(%Oban.Job{args: args})
+
+      receive do
+        {:reprocess_stop, m} -> {:ran, m}
+      after
+        0 -> :nothing_selected
+      end
+    after
+      :telemetry.detach(handler)
+    end
+  end
+
+  # What each cell declared a human may select it by. A cell that declared
+  # nothing gets no reprocess control — offering one would imply a choice the
+  # node never said it had.
+  defp slices_by_cell(plan) do
+    for {id, cell} <- plan.cells,
+        slices = ReactiveDag.Node.Rows.slices(cell),
+        slices != [],
+        into: %{},
+        do: {id, slices}
+  end
 
   defp scan_opts("full", control), do: full_scan_opts(control)
   defp scan_opts(_default, _control), do: []
@@ -226,6 +351,7 @@ defmodule ReactiveDagDashboard.PageLive do
     |> assign(:pending, MapSet.new(Insights.pending(plan)))
     |> assign(:report, Insights.last_report())
     |> assign(:controls, ReactiveDag.Source.controls(plan))
+    |> assign(:slices, slices_by_cell(plan))
   end
 
   @impl true
@@ -301,6 +427,34 @@ defmodule ReactiveDagDashboard.PageLive do
             </button>
           </div>
 
+        </section>
+
+        <section :if={@slices[@selected]} class="rdd-scan">
+          <h3>reprocess</h3>
+
+          <p class="rdd-origin">
+            re-derive rows whose inputs have not changed — after a code or prompt change
+          </p>
+
+          <div :for={slice <- @slices[@selected]} class="rdd-actions">
+            <span class="rdd-via"><%= slice.label %></span>
+
+            <button
+              :for={value <- slice.values || []}
+              phx-click="reprocess"
+              phx-value-cell={@selected}
+              phx-value-column={slice.column}
+              phx-value-value={value}
+            >
+              <%= value %>
+            </button>
+          </div>
+
+          <div class="rdd-actions">
+            <button phx-click="reprocess" phx-value-cell={@selected} title="and everything below it">
+              whole cell
+            </button>
+          </div>
         </section>
 
         <p :if={@scan_result} class="rdd-scan-result"><%= @scan_result %></p>

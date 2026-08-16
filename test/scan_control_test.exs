@@ -108,7 +108,8 @@ defmodule ReactiveDagDashboard.ScanControlTest do
       html = render_click(view, "scan", %{"cell" => "expenses", "mode" => "default"})
 
       assert html =~ "scanned expenses"
-      assert html =~ "1 key(s) changed"
+      # the detail turns "1 key(s) changed" into what actually happened
+      assert html =~ "1 new"
     end
 
     test "a cell with no scanner says so rather than failing" do
@@ -117,6 +118,24 @@ defmodule ReactiveDagDashboard.ScanControlTest do
       html = render_click(view, "scan", %{"cell" => "category_health", "mode" => "default"})
 
       assert html =~ "has no scanner"
+    end
+  end
+
+  describe "reporting what a scan did" do
+    test "a scanner without detail falls back to a count" do
+      {view, _} = drawer("expenses")
+      html = render_click(view, "scan", %{"cell" => "expenses", "mode" => "default"})
+
+      # this fixture DOES report detail, so it says what rather than how many
+      refute html =~ "key(s) changed"
+    end
+
+    test "a scan that changed nothing says so plainly" do
+      # the deep pass reaches a downed archive: no keys, and detail all empty
+      {view, _} = drawer("expenses")
+      html = render_click(view, "scan", %{"cell" => "expenses", "mode" => "full"})
+
+      assert html =~ "nothing changed"
     end
   end
 
@@ -141,6 +160,148 @@ defmodule ReactiveDagDashboard.ScanControlTest do
 
       assert html =~ "scanned expenses"
       refute html =~ "unreachable"
+    end
+  end
+
+  describe "reprocessing a fingerprinted node" do
+    # The bug this guards: `per_key` skips rows whose declared inputs have not
+    # moved, and after a code change they have not. So a reprocess that only
+    # MARKS claims the keys and re-runs nothing — the button works and nothing
+    # happens. The library's worker clears the stored fingerprint first; this
+    # page must go through it rather than reimplementing the marking, which is
+    # exactly how it lost that step once already.
+    setup do
+      start_supervised!(%{
+        id: FixtureGraph.Notes,
+        start: {FixtureGraph.Notes, :start_link, []}
+      })
+
+      FixtureGraph.Notes.reset()
+      :ok
+    end
+
+    test "the action actually runs again" do
+      {view, _} = drawer("expense_notes")
+
+      html = render_click(view, "reprocess", %{"cell" => "expense_notes"})
+
+      assert FixtureGraph.Notes.calls() != [],
+             "the fingerprint was not cleared, so every claimed row was skipped"
+
+      assert html =~ "reprocessed expense_notes"
+    end
+
+    test "a slice re-runs only its slice" do
+      {view, _} = drawer("expense_notes")
+
+      render_click(view, "reprocess", %{
+        "cell" => "expense_notes",
+        "column" => "fiscal_year",
+        "value" => "FY25"
+      })
+
+      # e1 is the FY25 row, at 500.0; e2 (FY24, 40.0) must not be re-described
+      assert FixtureGraph.Notes.calls() == [500.0]
+    end
+
+    test "the message reports how many were freed to re-run" do
+      {view, _} = drawer("expense_notes")
+
+      html =
+        render_click(view, "reprocess", %{
+          "cell" => "expense_notes",
+          "column" => "fiscal_year",
+          "value" => "FY25"
+        })
+
+      # "changed" alone cannot separate "nothing needed redoing" from "the
+      # request never reached the rows"
+      assert html =~ "1 re-run"
+    end
+  end
+
+  describe "the reprocess control" do
+    test "a sliceable cell offers one button per declared value" do
+      {_view, html} = drawer("expenses")
+
+      assert html =~ "reprocess"
+      assert html =~ "fiscal_year"
+      assert html =~ ~s|phx-value-value="FY25"|
+      assert html =~ ~s|phx-value-value="FY24"|
+    end
+
+    test "a cell declaring no slice gets no reprocess control" do
+      # offering one would imply a choice the node never said it had
+      {_view, html} = drawer("category_health")
+
+      refute html =~ "phx-click=\"reprocess\""
+    end
+
+    test "reprocessing a slice claims ONLY that slice's keys" do
+      # the message is not the evidence — watch what the drain actually claimed
+      test_pid = self()
+
+      :telemetry.attach(
+        "reprocess-claims",
+        [:reactive_dag, :drain, :step],
+        fn _e, _m, meta, _ -> send(test_pid, {:claimed, meta.cell, meta.step.claimed}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("reprocess-claims") end)
+
+      {view, _} = drawer("expenses")
+
+      html =
+        render_click(view, "reprocess", %{
+          "cell" => "expenses",
+          "column" => "fiscal_year",
+          "value" => "FY25"
+        })
+
+      assert html =~ "reprocessed expenses (fiscal_year = FY25)"
+
+      # e1 is the only FY25 row; e2 (FY24) must not be claimed
+      assert_received {:claimed, "expenses", ["e1"]}
+    end
+
+    test "the whole-cell button says what it is" do
+      {view, _} = drawer("expenses")
+
+      test_pid = self()
+
+      :telemetry.attach(
+        "reprocess-all-claims",
+        [:reactive_dag, :drain, :step],
+        fn _e, _m, meta, _ -> send(test_pid, {:claimed, meta.cell, meta.step.claimed}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("reprocess-all-claims") end)
+
+      html = render_click(view, "reprocess", %{"cell" => "expenses"})
+
+      assert html =~ "reprocessed expenses (whole cell)"
+      assert_received {:claimed, "expenses", ["*"]}
+    end
+
+    test "it drains, so downstream actually recomputes" do
+      test_pid = self()
+
+      :telemetry.attach(
+        "reprocess-drain",
+        [:reactive_dag, :drain, :step],
+        fn _e, _m, meta, _ -> send(test_pid, {:step, meta.cell}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("reprocess-drain") end)
+
+      {view, _} = drawer("expenses")
+      render_click(view, "reprocess", %{"cell" => "expenses", "column" => "fiscal_year", "value" => "FY25"})
+
+      assert_received {:step, "expenses"}
+      assert_received {:step, "category_health"}
     end
   end
 end

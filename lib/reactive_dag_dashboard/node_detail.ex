@@ -102,4 +102,46 @@ defmodule ReactiveDagDashboard.NodeDetail do
   def headline(%{implementation: %{summary: summary}}) when is_binary(summary), do: summary
   def headline(%{algebra: %{label: label}}) when is_binary(label), do: label
   def headline(_), do: nil
+
+  @doc """
+  The graph's sources, one row per SCANNER — what feeds this graph.
+
+  Grouped by scanner rather than listed per scanned cell. That is what fixes
+  the duplicate heading: a source feeding two leaves used to print its origin
+  twice, once above each cell, which read as two independent sources of the
+  same name.
+
+  Under source-as-node a scanner has one cell and `feeds` is its children. For
+  a host that has not migrated — two leaves each declaring the same scanner —
+  `feeds` is those leaves, and the source still appears once.
+  """
+  @spec sources(ReactiveDag.Plan.t(), map()) :: [map()]
+  def sources(plan, controls) do
+    controls
+    |> Enum.group_by(fn {_id, c} -> c.source end)
+    |> Enum.map(fn {module, entries} ->
+      {cell, control} = entries |> Enum.sort_by(&elem(&1, 0)) |> hd()
+
+      %{
+        cell: cell,
+        module: module,
+        origin: control.origin && control.origin[:label],
+        every: control.every,
+        args: control.args,
+        # every cell this scanner writes, plus what those cells feed — one
+        # crawl's reach, however the host declared it
+        feeds: feeds_of(plan, Enum.map(entries, &elem(&1, 0)))
+      }
+    end)
+    |> Enum.sort_by(&(&1.origin || &1.cell))
+  end
+
+  defp feeds_of(plan, cells) do
+    downstream = Enum.flat_map(cells, &Map.get(plan.parents, &1, []))
+
+    (cells ++ downstream)
+    |> Enum.uniq()
+    |> Enum.reject(&(&1 in cells and length(cells) == 1))
+    |> Enum.sort()
+  end
 end

@@ -61,11 +61,15 @@ defmodule ReactiveDagDashboard.DagLive do
 
   @impl true
   def handle_event("select", %{"cell" => cell_id}, socket) do
-    {:noreply, push_patch(socket, to: "#{socket.assigns.base_path}cell/#{cell_id}")}
+    {:noreply, push_patch(socket, to: path_for(socket.assigns, cell: cell_id))}
   end
 
+  # Direction rides in the URL, not just assigns. It used to be set here and
+  # nowhere else, so `handle_params` — which runs on every patch, including the
+  # one `select` issues — read it back from params and reset it to downstream.
+  # The toggle worked until you clicked anything.
   def handle_event("direction", %{"to" => to}, socket) do
-    {:noreply, socket |> assign(:direction, String.to_existing_atom(to)) |> assign_view()}
+    {:noreply, push_patch(socket, to: path_for(socket.assigns, direction: to))}
   end
 
   def handle_event("scan", %{"cell" => cell_id} = params, socket) do
@@ -173,6 +177,17 @@ defmodule ReactiveDagDashboard.DagLive do
 
   defp direction(%{"direction" => "upstream"}), do: :upstream
   defp direction(_), do: :downstream
+
+  # One place that builds a link, so a cell change cannot drop the direction and
+  # a direction change cannot drop the cell.
+  defp path_for(assigns, overrides) do
+    cell = Keyword.get(overrides, :cell, assigns.selected)
+    dir = Keyword.get(overrides, :direction, to_string(assigns.direction))
+
+    query = if dir == "upstream", do: "?direction=upstream", else: ""
+
+    "#{assigns.base_path}cell/#{cell}#{query}"
+  end
 
   # The host picks the mount prefix, so links derive from the request URI.
   defp base_path(uri, cell_id) do

@@ -41,8 +41,15 @@ defmodule ReactiveDagDashboard.Components do
         <tbody>
           <tr :for={s <- @sources} class={s.cell == @selected && "active"}>
             <td>
-              <div class="font-medium"><%= s.origin || s.cell %></div>
-              <div :if={s.origin} class="text-xs opacity-60"><%= s.cell %></div>
+              <button
+                type="button"
+                phx-click="select"
+                phx-value-cell={s.cell}
+                class="link link-hover text-left"
+              >
+                <div class="font-medium"><%= s.origin || s.cell %></div>
+                <div :if={s.origin} class="text-xs opacity-60"><%= s.cell %></div>
+              </button>
             </td>
             <td class="text-xs opacity-70"><%= Enum.join(s.feeds, ", ") %></td>
             <td>

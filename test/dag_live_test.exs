@@ -187,6 +187,64 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     end
   end
 
+  describe "navigation — reaching every node" do
+    test "a source in the table is selectable, not just scannable" do
+      # the table had a scan button and no way to SELECT the source, and the
+      # hierarchy only shows the default root's subtree — so six of seven
+      # sources were unreachable from the page entirely.
+      #
+      # Asserted on the MARKUP: `render_click` sends the event whether or not
+      # anything on the page emits it, so it would pass against the bug.
+      {:ok, _view, html} = at(@path)
+
+      row = table_of(html)
+
+      assert row =~ ~s|phx-click="select"|
+      assert row =~ ~s|phx-value-cell="council_portal"|
+    end
+
+    test "every source is reachable, not only the one that sorts first" do
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      assert html =~ "expenses"
+      assert html =~ "category_health", "its subtree, not council_portal's"
+    end
+  end
+
+  describe "direction survives navigation" do
+    test "the toggle puts direction in the URL" do
+      {:ok, view, _} = at("#{@path}/cell/all_verdicts")
+
+      render_click(view, "direction", %{"to" => "upstream"})
+
+      assert_patched(view, "#{@path}/cell/all_verdicts?direction=upstream")
+    end
+
+    test "and selecting a node KEEPS it" do
+      # the bug: `handle_params` runs on every patch and read direction back
+      # from params, so the toggle worked until you clicked anything
+      {:ok, view, _} = at("#{@path}/cell/all_verdicts?direction=upstream")
+
+      render_click(view, "select", %{"cell" => "category_health"})
+
+      assert_patched(view, "#{@path}/cell/category_health?direction=upstream")
+    end
+
+    test "upstream actually shows what feeds the node" do
+      {:ok, _view, html} = at("#{@path}/cell/all_verdicts?direction=upstream")
+
+      assert html =~ "what feeds"
+      assert html =~ "category_health"
+      assert html =~ "expenses", "two levels up, so the tree really inverted"
+    end
+
+    test "and downstream is still the default" do
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      assert html =~ "what changes"
+    end
+  end
+
   defp count(html, needle) do
     html |> String.split(needle) |> length() |> Kernel.-(1)
   end

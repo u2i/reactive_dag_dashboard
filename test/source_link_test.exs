@@ -76,4 +76,52 @@ defmodule ReactiveDagDashboard.SourceLinkTest do
       refute SourceLink.describe(nil)
     end
   end
+
+  describe "every node shape has an implementation to open" do
+    setup do
+      Application.put_env(:reactive_dag_dashboard, :source_url, "https://ex.com/%{path}#L%{line}")
+      :ok
+    end
+
+    test "a SOURCE links to its scanner — usually the most interesting code" do
+      # `poll Mod` names the module doing the actual crawling. This used to
+      # return nil: only `compute` nodes got a link, which in a real host was a
+      # third of the graph.
+      cell = %ReactiveDag.Cell{id: "x", inputs: [], meta: %{scan: ReactiveDagDashboard.Tree}}
+
+      assert %{module: ReactiveDagDashboard.Tree, url: url} = SourceLink.describe(cell)
+      assert url =~ "tree.ex"
+    end
+
+    test "a DECLARATIVE node links to its own resource" do
+      # a reduce/join has no module, but its `reactive do` block IS the
+      # implementation and lives in the resource file
+      cell = %ReactiveDag.Cell{
+        id: "x",
+        inputs: ["a"],
+        meta: %{reduce: %{}, resource: ReactiveDagDashboard.NodeDetail}
+      }
+
+      assert %{module: ReactiveDagDashboard.NodeDetail, url: url} = SourceLink.describe(cell)
+      assert url =~ "node_detail.ex"
+    end
+
+    test "compute wins over both — the most specific thing available" do
+      cell = %ReactiveDag.Cell{
+        id: "x",
+        inputs: ["a"],
+        meta: %{
+          compute: ReactiveDagDashboard.Tree,
+          scan: ReactiveDagDashboard.Actions,
+          resource: ReactiveDagDashboard.NodeDetail
+        }
+      }
+
+      assert %{module: ReactiveDagDashboard.Tree} = SourceLink.describe(cell)
+    end
+
+    test "a cell with none of them still reports nothing rather than guessing" do
+      assert SourceLink.describe(%ReactiveDag.Cell{id: "x", inputs: [], meta: %{}}) == nil
+    end
+  end
 end

@@ -78,13 +78,24 @@ defmodule ReactiveDagDashboard.SourceLink do
 
   # ── the module behind a cell ────────────────────────────────────────────────
 
-  # `compute Mod` and `run :action` are the shapes with an implementation to
-  # link to. A declarative reduce/join describes itself in the DSL, and a leaf's
-  # work happens in its scanner — which `Source.controls/1` already surfaces.
+  # EVERY node has an implementation somewhere; the question is only which
+  # module is the most specific thing to open.
+  #
+  #   * `compute Mod` — the module IS the recompute.
+  #   * `poll Mod` — the scanner. For a source that is the crawl itself, which
+  #     is usually the most interesting code in the graph.
+  #   * anything else — the node's own resource, whose `reactive do` block is
+  #     the implementation for a declarative reduce/join.
+  #
+  # This used to be the first case only, which covered a third of a real graph:
+  # in one host, 23 compute nodes had links and 7 sources plus 6 declarative
+  # nodes had none. The fixture hid it — its only linked node was a `compute`.
   defp implementation(cell) do
-    case cell[:compute] do
-      mod when is_atom(mod) and not is_nil(mod) -> mod
-      _ -> nil
+    cond do
+      is_atom(cell[:compute]) and not is_nil(cell[:compute]) -> cell[:compute]
+      is_atom(cell[:scan]) and not is_nil(cell[:scan]) -> cell[:scan]
+      is_atom(cell[:resource]) and not is_nil(cell[:resource]) -> cell[:resource]
+      true -> nil
     end
   end
 

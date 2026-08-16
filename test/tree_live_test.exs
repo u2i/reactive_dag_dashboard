@@ -89,13 +89,16 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
       assert html =~ "fingerprint :amount"
     end
 
-    test "a converging cell is expanded once and referenced once" do
+    test "a converging cell is drawn under every route that reaches it" do
       {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
 
-      # both edges drawn — the second says where else it arrives from, rather
-      # than repeating the subtree or vanishing into a band
-      assert html =~ "also from"
-      assert html =~ "2 routes in"
+      # inline: the cell appears under BOTH parents, so what sits under a parent
+      # is everything that parent causes
+      occurrences =
+        Regex.scan(~r/class="rdd-row rdd-hier-row"[^>]*>.*?all_verdicts</s, html)
+
+      assert length(occurrences) == 2
+      assert html =~ "2 routes in", "and says it is the same cell, reached twice"
     end
 
     test "by default a shared cell appears ONCE" do
@@ -120,7 +123,7 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
       {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses?shape=cells")
 
       # HEEx emits the interpolations across newlines, so match on the pieces
-      assert html =~ ~r/5\s+cells over\s+3\s+routes/
+      assert html =~ ~r/6\s+cells over\s+3\s+routes/
     end
 
     test "bands are named for what the distance means" do
@@ -157,7 +160,7 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
       # this is the assertion the whole view exists for: all_verdicts is one
       # cell reached two ways, and both ways are on the page
       rows = Regex.scan(~r/class="rdd-row[^"]*"[^>]*>.*?all_verdicts/s, html)
-      assert length(rows) == 2
+      assert length(rows) == 4, "two arrivals, each now carrying its own subtree row"
     end
 
     test "the second occurrence is marked as a repeat" do
@@ -194,7 +197,7 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
       {:ok, _view, html} = live(build_conn(), "#{@path}/into")
 
       assert html =~ "What feeds this"
-      assert html =~ "all_verdicts"
+      assert html =~ "verdict_audit"
     end
 
     test "the shared source appears once per input path" do

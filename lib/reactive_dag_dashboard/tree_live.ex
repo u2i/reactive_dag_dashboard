@@ -197,19 +197,15 @@ defmodule ReactiveDagDashboard.TreeLive do
 
             <span :if={op_detail(row)} class="rdd-detail"><%= op_detail(row) %></span>
 
-            <span :if={row.ref?} class="rdd-badge rdd-ref" title="expanded elsewhere on this page">
-              also from <%= Enum.join(row.arrivals -- [row.via], ", ") %>
-            </span>
-
-            <span :if={not row.ref? && row.routes > 1} class="rdd-badge rdd-converge">
+            <span :if={row.routes > 1} class="rdd-badge rdd-converge" title={"also reached via #{Enum.join(row.arrivals -- [row.via], ", ")}"}>
               <%= row.routes %> routes in
             </span>
 
             <span :if={row.cyclic?} class="rdd-badge rdd-cyclic">cycle</span>
 
-            <span :if={not row.ref?} class="rdd-count"><%= key_count(@status[row.id]) %></span>
+            <span class="rdd-count"><%= key_count(@status[row.id]) %></span>
 
-            <span :for={{status, n} <- if(row.ref?, do: [], else: statuses(@status[row.id]))} class="rdd-status">
+            <span :for={{status, n} <- statuses(@status[row.id])} class="rdd-status">
               <%= status %>&nbsp;<%= n %>
             </span>
           </li>
@@ -300,6 +296,7 @@ defmodule ReactiveDagDashboard.TreeLive do
   # "nothing changed" and "I am not being told about changes" look identical on a
   # static page, so the mode is stated rather than left to be inferred.
   defp live_hint(true), do: "subscribed to drain telemetry — updates arrive as they happen"
+
   defp live_hint(false),
     do: "no drain events; polling. Call ReactiveDagDashboard.Observer.attach/1 to go live."
 
@@ -310,10 +307,8 @@ defmodule ReactiveDagDashboard.TreeLive do
   # makes every edge look alike, and they are not: a join's left and right are
   # not interchangeable, a union's inputs are alternatives. The operator IS the
   # relationship, so it belongs on the node.
-  defp op_label(%{ref?: true}), do: nil
   defp op_label(row), do: Algebra.label(row.cell)
 
-  defp op_detail(%{ref?: true}), do: nil
   defp op_detail(row), do: Algebra.detail(row.cell)
 
   # The role is a property of the EDGE, declared by whichever end CONSUMES the
@@ -321,7 +316,6 @@ defmodule ReactiveDagDashboard.TreeLive do
   # consumes this row. Asking the producer instead yields nothing silently — it
   # never declared the relationship.
   defp input_role(_plan, _dir, %{via: nil}), do: nil
-  defp input_role(_plan, _dir, %{ref?: true}), do: nil
 
   defp input_role(plan, :upstream, row),
     do: plan.cells[row.via] |> Algebra.roles() |> Map.get(row.id)
@@ -329,7 +323,6 @@ defmodule ReactiveDagDashboard.TreeLive do
   defp input_role(plan, _downstream, row),
     do: plan.cells[row.id] |> Algebra.roles() |> Map.get(row.via)
 
-  defp hier_class(%{ref?: true}), do: "rdd-row rdd-hier-row rdd-ref-row"
   defp hier_class(%{cyclic?: true}), do: "rdd-row rdd-hier-row rdd-cyclic-row"
   defp hier_class(_), do: "rdd-row rdd-hier-row"
 
@@ -368,7 +361,6 @@ defmodule ReactiveDagDashboard.TreeLive do
 
   defp picker_label(:upstream), do: "derived tables"
   defp picker_label(_), do: "leaves"
-
 
   defp segment(:upstream), do: "into"
   defp segment(_), do: "from"

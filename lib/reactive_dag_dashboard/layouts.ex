@@ -99,12 +99,17 @@ defmodule ReactiveDagDashboard.Layouts do
              its other arrivals are drawn as references rather than repeated. */
           .rdd-hier ol { list-style: none; margin: .25rem 0 0; padding: 0;
                          display: flex; flex-direction: column; gap: .0625rem; }
+          /* the rail glyph sits INSIDE the indent step, so a child's name lands
+             one full step right of its parent's. Adding the glyph on top of the
+             indent put a depth-2 row level with a depth-1 sibling's text, which
+             reads as a sibling — the exact confusion this view exists to remove. */
           .rdd-hier-row { display: flex; align-items: baseline; gap: .375rem;
                           border: 0; padding: .1875rem 0;
-                          padding-left: calc(var(--indent) * 1.25rem); }
+                          padding-left: calc(var(--indent) * 1.5rem); }
           .rdd-hier-row a { color: inherit; font-weight: 500; }
           .rdd-branch { opacity: .35; font-family: ui-monospace, monospace;
-                        flex: none; }
+                        flex: none; width: 1.25rem; margin-left: -1.5rem;
+                        text-align: left; }
           /* the operator, which IS the relationship — not decoration */
           .rdd-op { font-size: .6875rem; opacity: .75; font-family: ui-monospace, monospace;
                     border: 1px solid currentColor; border-radius: .25rem;

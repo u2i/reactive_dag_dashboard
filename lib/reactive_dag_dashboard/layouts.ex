@@ -37,6 +37,10 @@ defmodule ReactiveDagDashboard.Layouts do
                         padding: 0 .25rem; }
           /* a cell whose rows could not be read — NOT the same as an empty one */
           .rdd-unknown { border-style: dashed; opacity: .55; }
+          /* keeps its rows elsewhere — a normal node, not a warning. Dimmed a
+             little because there is no count to read, but SOLID: the dashed
+             border means "could not look", which is a different claim. */
+          .rdd-elsewhere { opacity: .8; }
           .rdd-drawer { margin-top: 1.5rem; border: 1px solid currentColor;
                         border-radius: .375rem; padding: .75rem 1rem; }
           .rdd-drawer dl { display: grid; grid-template-columns: max-content 1fr;

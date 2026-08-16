@@ -178,7 +178,9 @@ defmodule ReactiveDagDashboard.PageLive do
   end
 
   defp put_opts(args, []), do: args
-  defp put_opts(args, opts), do: Map.put(args, "opts", Map.new(opts, fn {k, v} -> {to_string(k), v} end))
+
+  defp put_opts(args, opts),
+    do: Map.put(args, "opts", Map.new(opts, fn {k, v} -> {to_string(k), v} end))
 
   # The worker builds the plan itself — a job argument cannot carry one — so it
   # is told the same MFA this page was given, rather than relying on the host
@@ -397,7 +399,7 @@ defmodule ReactiveDagDashboard.PageLive do
 
             <span :if={cell.leaf?} class="rdd-badge">leaf</span>
             <span :if={MapSet.member?(@pending, cell.id)} class="rdd-badge">pending</span>
-            <span class="rdd-count"><%= key_count(@status[cell.id]) %></span>
+            <span class="rdd-count" title={count_title(@status[cell.id])}><%= key_count(@status[cell.id]) %></span>
 
             <span :for={{status, n} <- statuses(@status[cell.id])} class="rdd-status">
               <%= status %>&nbsp;<%= n %>
@@ -509,6 +511,7 @@ defmodule ReactiveDagDashboard.PageLive do
   # "nothing changed" and "I am not being told about changes" look identical on a
   # static page, so the mode is stated rather than left to be inferred.
   defp live_hint(true), do: "subscribed to drain telemetry — updates arrive as they happen"
+
   defp live_hint(false),
     do: "no drain events; polling. Call ReactiveDagDashboard.Observer.attach/1 to go live."
 
@@ -517,13 +520,32 @@ defmodule ReactiveDagDashboard.PageLive do
 
   # a cell whose rows could not be read reports no statuses AND no keys. That is
   # NOT the same as an empty cell, and must not render as a quiet one.
+  # dashed-and-dimmed means "I could not look". An empty table and a node that
+  # keeps its rows elsewhere are both fine, and must not wear the warning.
   defp cell_class(nil), do: "rdd-cell rdd-unknown"
-  defp cell_class(%{key_count: 0}), do: "rdd-cell rdd-unknown"
+  defp cell_class(%{rows: :unreadable}), do: "rdd-cell rdd-unknown"
+  defp cell_class(%{rows: :elsewhere}), do: "rdd-cell rdd-elsewhere"
   defp cell_class(_status), do: "rdd-cell"
 
+  # `key_count: 0` is three different states, and only one is a problem. The
+  # library says which in `rows:` — a real table that is empty, a node that keeps
+  # its rows elsewhere (the write-elsewhere and escape-hatch shapes), or a read
+  # that actually failed. Showing `?` for all three raises an alarm on two
+  # non-problems, and the loudest reading wins: a publish root, often the node an
+  # app actually reads, rendered as broken.
   defp key_count(nil), do: "?"
-  defp key_count(%{key_count: 0}), do: "?"
+  defp key_count(%{rows: :unreadable}), do: "?"
+  defp key_count(%{rows: :elsewhere}), do: "—"
   defp key_count(%{key_count: n}), do: n
+
+  defp count_title(nil), do: "no status for this cell"
+  defp count_title(%{rows: :unreadable}), do: "could not read this node's rows"
+
+  defp count_title(%{rows: :elsewhere}),
+    do: "this node keeps its rows elsewhere — nothing to count here"
+
+  defp count_title(%{key_count: 0}), do: "no rows"
+  defp count_title(%{key_count: n}), do: "#{n} keys"
 
   # a nil status is "this node has no :status column" — a rollup, not a verdict.
   # Showing a `nil` chip would be noise, so only real statuses are chipped.

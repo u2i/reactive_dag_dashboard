@@ -67,7 +67,7 @@ defmodule ReactiveDagDashboard.PageLiveTest do
 
     # 2 expenses, 2 categories — if Insights and the page disagreed about where
     # rows live, these would read "?" instead
-    assert html =~ ~s|class="rdd-count">2<|
+    assert html =~ ~s|class="rdd-count" title="2 keys">2<|
     refute html =~ ~s|class="rdd-cell rdd-unknown"|
   end
 
@@ -89,14 +89,26 @@ defmodule ReactiveDagDashboard.PageLiveTest do
     assert html =~ ~s|href="/ops/dag/cell/category_health"|
   end
 
-  test "an empty cell renders as UNKNOWN, not as a quiet one" do
-    # "I could not look" and "there is nothing there" are different claims, and
-    # only one of them is good news. A zero key count renders as `?`.
+  test "an EMPTY table reports zero, because zero is a real answer" do
+    # This test used to assert the opposite, on the right principle applied to
+    # the wrong case: "I could not look" and "there is nothing there" ARE
+    # different claims — and emptying a readable table is the second one.
+    # Rendering `?` here made a working node look broken.
     for row <- Ash.read!(FixtureGraph.CategoryHealth), do: Ash.destroy!(row)
 
     {_view, html} = render_page()
 
-    assert html =~ ~s|class="rdd-cell rdd-unknown"|
-    assert html =~ ~s|class="rdd-count">?<|
+    assert html =~ ~s|class="rdd-count" title="no rows">0<|
+    refute html =~ ~s|class="rdd-cell rdd-unknown"|
+  end
+
+  test "a node that keeps its rows elsewhere is not an alarm" do
+    # the write-elsewhere / escape-hatch shape: no table by design. It has
+    # nothing to count and that is not a failure to count.
+    {_view, html} = render_page()
+
+    assert html =~ "rdd-elsewhere"
+    assert html =~ ~s|>—<|
+    refute html =~ ~s|title="could not read this node's rows"|
   end
 end

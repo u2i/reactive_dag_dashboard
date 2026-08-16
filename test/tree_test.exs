@@ -353,7 +353,13 @@ defmodule ReactiveDagDashboard.TreeTest do
       # a scanned leaf nothing consumes is BOTH a root and a sink, which is not a
       # contradiction: it is where change enters and where it stops
       assert Tree.sinks(plan) ==
-               ["expense_notes", "minutes", "resolutions", "unscanned", "verdict_audit"]
+               [
+                 "expense_notes",
+                 "minutes",
+                 "published",
+                 "resolutions",
+                 "verdict_audit"
+               ]
     end
   end
 

@@ -98,28 +98,29 @@ defmodule ReactiveDagDashboard.Tree do
   end
 
   @doc """
-  The roots grouped by the SCANNER that feeds them.
+  The roots, each with the origin of the source that fetches it.
 
-  A source can feed several leaves — one crawl of one site whose rows land in two
-  cells — and the picker listing them side by side says nothing about that, so
-  two halves of one crawl read as two independent sources.
+  This used to GROUP roots by scanner: a source feeding two leaves put both in
+  one bucket, because listing them side by side said nothing about their being
+  two halves of one crawl.
 
-  The pairing is a fact of the graph (`scan` on the leaf, verified at assembly
-  against the scanner's own `leaf_cells/1`), so this is a `group_by` rather than
-  a guess. Returns `{origin, scanner, [root_id]}` sorted by label, with unscanned
-  roots last under `nil` — a leaf whose keys arrive some other way is not
-  mis-grouped, it is simply not part of a crawl.
+  A source is now a node, so that fan-out is graph structure — one root with two
+  children — and the hierarchy below the picker shows it. What is left is
+  labelling: a root reads better as *"Council portal"* than as `council_portal`,
+  and only the source module knows its own name for itself.
 
-  `origin` is the scanner's own `origin/0` label where it offers one, so the
-  group reads as *"City agenda center"* rather than as a module name.
+  Returns `{origin, scanner, [root_id]}` to keep the picker's shape, with one
+  root per entry and unscanned roots last under `nil`.
   """
   @spec roots_by_scanner(Plan.t()) :: [{String.t() | nil, module() | nil, [String.t()]}]
   def roots_by_scanner(%Plan{cells: cells} = plan) do
     plan
     |> roots()
-    |> Enum.group_by(&cells[&1].meta[:scan])
-    |> Enum.map(fn {scanner, ids} -> {origin_label(scanner), scanner, Enum.sort(ids)} end)
-    |> Enum.sort_by(fn {label, scanner, _ids} -> {is_nil(scanner), label || ""} end)
+    |> Enum.map(fn id ->
+      scanner = cells[id].meta[:scan]
+      {origin_label(scanner), scanner, [id]}
+    end)
+    |> Enum.sort_by(fn {label, scanner, [id]} -> {is_nil(scanner), label || id} end)
   end
 
   defp origin_label(nil), do: nil

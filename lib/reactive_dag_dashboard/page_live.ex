@@ -208,13 +208,14 @@ defmodule ReactiveDagDashboard.PageLive do
 
   defp summarise(%{changed: changed}), do: "#{length(changed)} key(s) changed"
 
-  # A source can feed several leaves: one crawl of one upstream whose rows land
-  # in two cells, marked by a single `refresh/3`. Reporting only the cell whose
-  # button was pressed would hide half the work — and the hidden half is exactly
-  # where someone looks when a downstream number surprises them.
+  # A scanner may still return `changed:` keyed BY LEAF, marking several cells
+  # from one poll — `Source.refresh/3` honours it. Reporting only the cell whose
+  # button was pressed would then hide half the work.
   #
-  # Named only when there IS more than one, so the ordinary single-leaf scan does
-  # not grow a breakdown it has no use for.
+  # It is no longer the recommended shape: a source is a node, so one crawl
+  # feeding several cells is a source with several consumers, and the drain
+  # reaches them. This stays for hosts that mark directly, and renders nothing
+  # for the common case where a poll marks one cell.
   defp across_leaves(%{marked: marked}) when map_size(marked) > 1 do
     detail =
       marked

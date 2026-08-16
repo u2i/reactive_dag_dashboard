@@ -147,18 +147,15 @@ defmodule ReactiveDagDashboard.TreeLive do
 
       <h1><%= heading(@direction) %></h1>
 
-      <section :if={@direction != :upstream} class="rdd-picker">
+      <section class="rdd-picker">
         <h2><%= picker_label(@direction) %></h2>
 
-        <div :for={{origin, scanner, ids} <- @root_groups} class="rdd-group">
-          <h3 :if={scanner} class="rdd-group-label">
+        <div :for={{origin, scanner, ids} <- picker_groups(@direction, @root_groups, @sinks)} class="rdd-group">
+          <h3 :if={origin} class={group_class(scanner)}>
             <%= origin %>
-            <span :if={length(ids) > 1} class="rdd-note">
+            <span :if={scanner && length(ids) > 1} class="rdd-note">
               one crawl, <%= length(ids) %> leaves
             </span>
-          </h3>
-          <h3 :if={is_nil(scanner)} class="rdd-group-label rdd-unscanned">
-            no scanner declared
           </h3>
 
           <ul>
@@ -169,17 +166,6 @@ defmodule ReactiveDagDashboard.TreeLive do
             </li>
           </ul>
         </div>
-      </section>
-
-      <section :if={@direction == :upstream} class="rdd-picker">
-        <h2><%= picker_label(@direction) %></h2>
-        <ul>
-          <li :for={id <- pickable(@direction, @roots, @sinks)} class="rdd-cell">
-            <.link patch={"#{@base_path}#{segment(@direction)}/#{id}"} class={picked(id, @selected)}>
-              <%= id %>
-            </.link>
-          </li>
-        </ul>
       </section>
 
       <p :if={@selected == nil} class="rdd-empty">
@@ -365,11 +351,24 @@ defmodule ReactiveDagDashboard.TreeLive do
   defp heading(:upstream), do: "What feeds this"
   defp heading(_), do: "Where a change goes"
 
+  # Downstream leaves group by the crawl that feeds them; sinks have no scanner,
+  # so grouping them by one would invent a relationship. One shape either way,
+  # so the markup does not fork.
+  defp picker_groups(:upstream, _groups, sinks), do: [{nil, nil, sinks}]
+
+  defp picker_groups(_downstream, groups, _sinks) do
+    Enum.map(groups, fn
+      {nil, nil, ids} -> {"no scanner declared", nil, ids}
+      group -> group
+    end)
+  end
+
+  defp group_class(nil), do: "rdd-group-label rdd-unscanned"
+  defp group_class(_scanner), do: "rdd-group-label"
+
   defp picker_label(:upstream), do: "derived tables"
   defp picker_label(_), do: "leaves"
 
-  defp pickable(:upstream, _roots, sinks), do: sinks
-  defp pickable(_downstream, roots, _sinks), do: roots
 
   defp segment(:upstream), do: "into"
   defp segment(_), do: "from"

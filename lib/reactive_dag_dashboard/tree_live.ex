@@ -7,8 +7,11 @@ defmodule ReactiveDagDashboard.TreeLive do
   | `/from/:cell_id` | a change here goes **where**? |
   | `/into/:cell_id` | this table is fed by **what**? |
 
-  Both render `ReactiveDagDashboard.Tree`, which repeats a cell once per path
-  rather than collapsing it — see that module for why. The index depth panel
+  Both render `ReactiveDagDashboard.Tree` in one of two shapes. The default is
+  **collapsed** — one row per cell, banded by distance, each row naming every
+  edge it arrives by — because following a source to where it lands is the
+  common question. `?shape=paths` gives the **exploded** tree, a row per route,
+  which is the shape for costing a change rather than tracking one. The index depth panel
   (`PageLive`) answers "what does the graph contain"; these answer "how does a
   change travel", which is the question you have when something is wrong.
 
@@ -42,6 +45,7 @@ defmodule ReactiveDagDashboard.TreeLive do
      socket
      |> assign(:direction, direction)
      |> assign(:selected, id)
+     |> assign(:shape, shape(params))
      |> assign(:base_path, base_path(uri, direction, params["cell_id"]))
      |> assign_tree()}
   end
@@ -82,15 +86,23 @@ defmodule ReactiveDagDashboard.TreeLive do
     |> assign(:sinks, Tree.sinks(plan))
   end
 
-  defp assign_tree(%{assigns: %{selected: nil}} = socket), do: assign(socket, :rows, [])
+  defp assign_tree(%{assigns: %{selected: nil}} = socket),
+    do: socket |> assign(:rows, []) |> assign(:levels, []) |> assign(:paths, 0)
 
   defp assign_tree(%{assigns: %{plan: plan, selected: id, direction: dir}} = socket) do
     tree = if dir == :upstream, do: Tree.upstream(plan, id), else: Tree.downstream(plan, id)
 
     socket
     |> assign(:rows, Tree.flatten(tree))
+    |> assign(:levels, Tree.levels(plan, tree))
     |> assign(:paths, Tree.path_count(tree))
   end
+
+  # Collapsed by default: following a source to where it lands is the common
+  # question, and the exploded shape answers a different one (what does this
+  # change COST) at the price of a row per route.
+  defp shape(%{"shape" => "paths"}), do: :paths
+  defp shape(_), do: :cells
 
   # with no cell named, start somewhere useful rather than blank: the first
   # place a change enters (downstream) or the last place it lands (upstream).
@@ -142,10 +154,54 @@ defmodule ReactiveDagDashboard.TreeLive do
         This graph has no <%= picker_label(@direction) %>.
       </p>
 
-      <section :if={@selected} class="rdd-tree">
+      <section :if={@selected && @shape == :cells} class="rdd-bands">
+        <h2>
+          <%= cell_total(@levels) %> cells over <%= @paths %>
+          <%= if @paths == 1, do: "route", else: "routes" %>
+          <span class="rdd-note">
+            one row per cell —
+            <.link patch={"#{@base_path}#{segment(@direction)}/#{@selected}?shape=paths"}>
+              show every route instead
+            </.link>
+          </span>
+        </h2>
+
+        <div :for={{distance, cells} <- @levels} class="rdd-band">
+          <h3 class="rdd-band-label"><%= band_label(distance, @direction) %></h3>
+
+          <ul>
+            <li :for={row <- cells} class="rdd-cell">
+              <.link patch={"#{@base_path}#{segment(@direction)}/#{row.id}"}><%= row.id %></.link>
+
+              <span :if={row.cell && row.cell.leaf?} class="rdd-badge">leaf</span>
+
+              <span :if={row.via != []} class="rdd-via">
+                <%= via_label(@direction) %> <%= Enum.join(row.via, ", ") %>
+              </span>
+
+              <span :if={row.routes > 1} class="rdd-badge rdd-converge" title="reached by more than one route">
+                <%= row.routes %> routes
+              </span>
+
+              <span class="rdd-count"><%= key_count(@status[row.id]) %></span>
+
+              <span :for={{status, n} <- statuses(@status[row.id])} class="rdd-status">
+                <%= status %>&nbsp;<%= n %>
+              </span>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section :if={@selected && @shape == :paths} class="rdd-tree">
         <h2>
           <%= @paths %> <%= if @paths == 1, do: "path", else: "paths" %>
-          <span class="rdd-note">every route shown, so a shared cell repeats</span>
+          <span class="rdd-note">
+            every route shown, so a shared cell repeats —
+            <.link patch={"#{@base_path}#{segment(@direction)}/#{@selected}"}>
+              collapse to one row per cell
+            </.link>
+          </span>
         </h2>
 
         <ol>
@@ -187,6 +243,17 @@ defmodule ReactiveDagDashboard.TreeLive do
 
   defp nonempty("", fallback), do: fallback
   defp nonempty(path, _fallback), do: path
+
+  defp cell_total(levels), do: levels |> Enum.map(fn {_d, rows} -> length(rows) end) |> Enum.sum()
+
+  # A band is a distance, named for what that distance MEANS in this direction —
+  # "2 hops" says nothing; "two recomputes away" is the thing you were tracking.
+  defp band_label(0, :upstream), do: "this table"
+  defp band_label(0, _), do: "the source"
+  defp band_label(1, :upstream), do: "fed directly by"
+  defp band_label(1, _), do: "recomputes directly"
+  defp band_label(n, :upstream), do: "#{n} steps upstream"
+  defp band_label(n, _), do: "#{n} recomputes away"
 
   defp heading(:upstream), do: "What feeds this"
   defp heading(_), do: "Where a change goes"

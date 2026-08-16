@@ -29,8 +29,58 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
       assert html =~ "expenses"
     end
 
-    test "the shared cell appears ONCE PER PATH in the rendered page" do
+    test "by default a shared cell appears ONCE" do
+      # the complaint this fixes: following a source meant reading the same cell
+      # name repeatedly down an indented list, losing your place at every
+      # convergence
       {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+
+      rows = Regex.scan(~r/rdd-cell[^>]*>\s*<a[^>]*>all_verdicts</s, html)
+      assert length(rows) == 1
+    end
+
+    test "and states the routes that collapsed into it" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+
+      # convergence becomes a fact on the row instead of a duplicate row
+      assert html =~ "2 routes"
+      assert html =~ "category_health, spend_rollup"
+    end
+
+    test "the default counts cells AND routes, so neither is hidden" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+
+      # HEEx emits the interpolations across newlines, so match on the pieces
+      assert html =~ ~r/5\s+cells over\s+3\s+routes/
+    end
+
+    test "bands are named for what the distance means" do
+      # "2 hops" says nothing; this is the thing you were tracking
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+
+      assert html =~ "the source"
+      assert html =~ "recomputes directly"
+      assert html =~ "2 recomputes away"
+    end
+
+    test "upstream names its bands the other way round" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/into/all_verdicts")
+
+      assert html =~ "this table"
+      assert html =~ "fed directly by"
+    end
+
+    test "each shape links to the other" do
+      {:ok, _view, collapsed} = live(build_conn(), "#{@path}/from/expenses")
+      assert collapsed =~ "show every route instead"
+
+      {:ok, _view, exploded} = live(build_conn(), "#{@path}/from/expenses?shape=paths")
+      assert exploded =~ "collapse to one row per cell"
+    end
+
+    test "the shared cell appears ONCE PER PATH in the rendered page" do
+      # the exploded shape is now opt-in; this is what it exists to show
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses?shape=paths")
 
       # this is the assertion the whole view exists for: all_verdicts is one
       # cell reached two ways, and both ways are on the page
@@ -39,7 +89,7 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
     end
 
     test "the second occurrence is marked as a repeat" do
-      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses?shape=paths")
 
       assert html =~ "rdd-repeat-row"
       assert html =~ ">\n              repeat\n            </span>" or html =~ "repeat"
@@ -54,7 +104,7 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
     end
 
     test "the path count is stated, and counts routes not cells" do
-      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses?shape=paths")
 
       assert html =~ "3 paths"
     end
@@ -76,7 +126,7 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
     end
 
     test "the shared source appears once per input path" do
-      {:ok, _view, html} = live(build_conn(), "#{@path}/into/all_verdicts")
+      {:ok, _view, html} = live(build_conn(), "#{@path}/into/all_verdicts?shape=paths")
 
       rows = Regex.scan(~r/class="rdd-row[^"]*"[^>]*>.*?expenses/s, html)
       assert length(rows) == 2

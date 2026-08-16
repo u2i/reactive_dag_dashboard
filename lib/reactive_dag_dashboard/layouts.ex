@@ -83,6 +83,17 @@ defmodule ReactiveDagDashboard.Layouts do
           .rdd-cyclic-row { color: #b3341f; }
           .rdd-cyclic { font-weight: 600; }
 
+          /* the collapsed shape: one row per cell, banded by distance. Bands
+             replace indentation because depth-as-padding stops being readable
+             at about three levels, and `via` states parentage anyway. */
+          .rdd-band { margin: .5rem 0 1rem; }
+          .rdd-band-label { font-size: .6875rem; text-transform: uppercase;
+                            letter-spacing: .06em; opacity: .5; margin: 0 0 .375rem;
+                            font-weight: 600; }
+          .rdd-bands ul { display: flex; flex-wrap: wrap; gap: .5rem; }
+          .rdd-converge { border: 1px solid currentColor; border-radius: .25rem;
+                          padding: 0 .25rem; opacity: .8; }
+
           /* live vs polling — stated, not inferred */
           .rdd-live { margin-left: auto; font-size: .6875rem; letter-spacing: .06em;
                       text-transform: uppercase; display: inline-flex;

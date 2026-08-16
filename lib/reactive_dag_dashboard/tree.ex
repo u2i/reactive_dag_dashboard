@@ -1,6 +1,7 @@
 defmodule ReactiveDagDashboard.Tree do
   @moduledoc """
-  The graph as a **fully exploded tree**, in either direction.
+  The graph as a tree, in either direction — exploded by route, or collapsed
+  to one row per cell.
 
   A DAG is not a tree: a cell reached by three paths is one cell, but it is
   three routes for a change to travel. The two questions an operator actually
@@ -10,11 +11,21 @@ defmodule ReactiveDagDashboard.Tree do
       `plan.parents`
     * *what feeds this table?* — `upstream/2`, following each cell's `inputs`
 
-  So the expansion **repeats** a cell once per path rather than collapsing it.
-  Collapsing would answer "which cells are involved", which is a different and
-  less useful question: it hides that touching one leaf costs you three
-  recomputes of the same node, and it hides which of its inputs each one came
-  through.
+  Both shapes are here, because they answer different questions and neither is
+  a better version of the other:
+
+    * `downstream/2` + `flatten/1` — **exploded**, a cell repeated once per
+      route. Answers *what does changing this leaf COST*: three routes to a node
+      is three recomputes, and collapsing hides that.
+    * `levels/2` — **collapsed**, one row per cell banded by distance. Answers
+      *where does this source LAND*, which is the question you have when
+      tracking data through the graph rather than costing a change.
+
+  The exploded shape was the only one for a while, and at real graph sizes it
+  stops answering the second question at all: row count grows with paths rather
+  than cells, so the same name recurs down the page, each occurrence marked a
+  repeat without saying what it repeats from. `levels/2` turns that duplication
+  into the useful fact — the row states every edge it arrives by.
 
   ## Cycles
 
@@ -109,6 +120,57 @@ defmodule ReactiveDagDashboard.Tree do
   @spec path_count(node_t()) :: non_neg_integer()
   def path_count(%{children: []}), do: 1
   def path_count(%{children: children}), do: children |> Enum.map(&path_count/1) |> Enum.sum()
+
+  @doc """
+  The same reachable set as `flatten/1`, but **one row per cell** — the shape for
+  tracking a source to where it lands.
+
+  The exploded tree answers *"what does changing this leaf cost me"*, and repeats
+  a cell once per route to do it. That is the right answer to that question and
+  the wrong shape for this one: a graph with real fan-in has a row count that
+  grows with PATHS, so the same name recurs down the page, each occurrence marked
+  a repeat without saying what it repeats from. Following a source to its
+  destinations then means holding a stack in your head and losing it at every
+  convergence.
+
+  Collapsing turns the duplication into the useful fact. Each cell appears once,
+  at its greatest distance from the origin — so it never renders above something
+  it depends on — and carries `via`, EVERY edge it arrives by:
+
+      %{id: "all_verdicts", distance: 2, via: ["category_health", "spend_rollup"],
+        cell: %Cell{}, routes: 2}
+
+  `routes` is how many paths reach it, which is the number the exploded view was
+  spending a row each on.
+
+  Rows come back grouped and ordered by distance, so a template renders bands
+  rather than indentation — the origin, then what it touches directly, then what
+  that touches. Depth-as-padding stops being readable at about three levels; a
+  band stays readable at any depth, because position no longer has to encode
+  parentage when `via` states it.
+  """
+  @spec levels(Plan.t(), node_t()) :: [{non_neg_integer(), [map()]}]
+  def levels(%Plan{}, tree) do
+    tree
+    |> flatten()
+    |> Enum.reject(& &1.cyclic?)
+    |> Enum.group_by(& &1.id)
+    |> Enum.map(fn {id, occurrences} ->
+      %{
+        id: id,
+        cell: hd(occurrences).cell,
+        # the FURTHEST occurrence: a cell reachable in one hop and also in three
+        # sits below everything on the long route, or it would render above a
+        # cell it depends on
+        distance: occurrences |> Enum.map(& &1.depth) |> Enum.max(),
+        via: occurrences |> Enum.map(& &1.via) |> Enum.reject(&is_nil/1) |> Enum.uniq() |> Enum.sort(),
+        routes: length(occurrences)
+      }
+    end)
+    |> Enum.group_by(& &1.distance)
+    |> Enum.map(fn {distance, rows} -> {distance, Enum.sort_by(rows, & &1.id)} end)
+    |> Enum.sort_by(&elem(&1, 0))
+  end
 
   # ── building ────────────────────────────────────────────────────────────────
 

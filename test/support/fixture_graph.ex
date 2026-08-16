@@ -165,7 +165,11 @@ defmodule ReactiveDagDashboard.FixtureGraph do
       # upstream is down — the shape a real crawler hits on a full crawl
       unreachable = if opts[:recent] == false, do: [{"archive", :timeout}], else: []
 
-      {:ok, %{changed: [], unreachable: unreachable}}
+      # a cheap pass sees the rows it always sees; the deep pass reaches an
+      # archive that is down and therefore reports nothing new
+      changed = if unreachable == [], do: ["e1"], else: []
+
+      {:ok, %{changed: changed, unreachable: unreachable}}
     end
   end
 

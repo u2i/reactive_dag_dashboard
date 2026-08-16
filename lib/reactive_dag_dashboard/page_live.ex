@@ -109,6 +109,25 @@ defmodule ReactiveDagDashboard.PageLive do
     {:noreply, if(reload?, do: load(socket), else: socket)}
   end
 
+  # Reprocessing is the second thing this page DOES. Same split as the scan: the
+  # library owns what it means, the page owns that someone asked for it now.
+  @impl true
+  def handle_event("reprocess", %{"cell" => cell_id} = params, socket) do
+    args =
+      %{"cell" => cell_id, "reason" => "dashboard"}
+      |> put_where(params)
+      |> put_plan(socket.assigns.plan_mfa)
+
+    message =
+      case run_reprocess(args, socket.assigns.plan, cell_id, params) do
+        :queued -> "reprocess of #{describe(cell_id, params)} queued"
+        {:ran, n} -> "reprocessed #{describe(cell_id, params)}: #{n} key(s) changed"
+        {:error, reason} -> "reprocess failed: #{inspect(reason)}"
+      end
+
+    {:noreply, socket |> assign(:scan_result, message) |> load()}
+  end
+
   defp enqueue_scan(cell_id, mode, assigns) do
     case assigns.controls[cell_id] do
       nil ->
@@ -186,6 +205,62 @@ defmodule ReactiveDagDashboard.PageLive do
 
   defp summarise(%{changed: changed}), do: "#{length(changed)} key(s) changed"
 
+  defp put_where(args, %{"column" => c, "value" => v}), do: Map.put(args, "where", %{c => v})
+  defp put_where(args, _params), do: args
+
+  defp describe(cell_id, %{"column" => c, "value" => v}), do: "#{cell_id} (#{c} = #{v})"
+  defp describe(cell_id, _params), do: "#{cell_id} (whole cell)"
+
+  # Queue it when Oban is there — a reprocess can drain a large subtree, and
+  # blocking the LiveView on it would look hung. Without Oban, do it here: the
+  # marking and draining are the same either way.
+  defp run_reprocess(args, plan, cell_id, params) do
+    if Code.ensure_loaded?(ReactiveDag.ReprocessWorker) and oban_running?() do
+      case args |> ReactiveDag.ReprocessWorker.new() |> Oban.insert() do
+        {:ok, _job} -> :queued
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      inline_reprocess(plan, cell_id, params)
+    end
+  end
+
+  defp inline_reprocess(plan, cell_id, params) do
+    cell = plan.cells[cell_id]
+    keys = reprocess_keys(cell, params)
+
+    ReactiveDag.Frontier.mark_dirty(cell_id, keys, "dashboard")
+
+    for {parent, parent_keys} <-
+          ReactiveDag.Graph.dirty_parents(plan, cell_id, keys, ReactiveDag.Node.KeyRule) do
+      ReactiveDag.Frontier.mark_dirty(parent, parent_keys, "dashboard")
+    end
+
+    {:ok, report} =
+      ReactiveDag.Drain.run(plan,
+        recompute: ReactiveDag.Node.Recompute,
+        key_rule: ReactiveDag.Node.KeyRule
+      )
+
+    {:ran, ReactiveDag.Drain.Report.changed_total(report)}
+  end
+
+  defp reprocess_keys(cell, %{"column" => c, "value" => v}),
+    do: ReactiveDag.Node.Rows.keys_where(cell, [{String.to_existing_atom(c), v}])
+
+  defp reprocess_keys(_cell, _params), do: ["*"]
+
+  # What each cell declared a human may select it by. A cell that declared
+  # nothing gets no reprocess control — offering one would imply a choice the
+  # node never said it had.
+  defp slices_by_cell(plan) do
+    for {id, cell} <- plan.cells,
+        slices = ReactiveDag.Node.Rows.slices(cell),
+        slices != [],
+        into: %{},
+        do: {id, slices}
+  end
+
   defp scan_opts("full", control), do: full_scan_opts(control)
   defp scan_opts(_default, _control), do: []
 
@@ -246,6 +321,7 @@ defmodule ReactiveDagDashboard.PageLive do
     |> assign(:pending, MapSet.new(Insights.pending(plan)))
     |> assign(:report, Insights.last_report())
     |> assign(:controls, ReactiveDag.Source.controls(plan))
+    |> assign(:slices, slices_by_cell(plan))
   end
 
   @impl true
@@ -321,6 +397,34 @@ defmodule ReactiveDagDashboard.PageLive do
             </button>
           </div>
 
+        </section>
+
+        <section :if={@slices[@selected]} class="rdd-scan">
+          <h3>reprocess</h3>
+
+          <p class="rdd-origin">
+            re-derive rows whose inputs have not changed — after a code or prompt change
+          </p>
+
+          <div :for={slice <- @slices[@selected]} class="rdd-actions">
+            <span class="rdd-via"><%= slice.label %></span>
+
+            <button
+              :for={value <- slice.values || []}
+              phx-click="reprocess"
+              phx-value-cell={@selected}
+              phx-value-column={slice.column}
+              phx-value-value={value}
+            >
+              <%= value %>
+            </button>
+          </div>
+
+          <div class="rdd-actions">
+            <button phx-click="reprocess" phx-value-cell={@selected} title="and everything below it">
+              whole cell
+            </button>
+          </div>
         </section>
 
         <p :if={@scan_result} class="rdd-scan-result"><%= @scan_result %></p>

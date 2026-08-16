@@ -27,6 +27,7 @@ defmodule ReactiveDagDashboard.FixtureGraph do
       attribute :key, :string, primary_key?: true, allow_nil?: false, public?: true
       attribute :category, :string, public?: true
       attribute :amount, :float, public?: true
+      attribute :fiscal_year, :string, public?: true
     end
 
     actions do
@@ -34,13 +35,14 @@ defmodule ReactiveDagDashboard.FixtureGraph do
 
       create :upsert do
         upsert?(true)
-        accept([:key, :category, :amount])
+        accept([:key, :category, :amount, :fiscal_year])
       end
     end
 
     reactive do
       id(:expenses)
       leaf?(true)
+      slice(:fiscal_year, values: ["FY24", "FY25"])
       scan(ReactiveDagDashboard.FixtureGraph.ExpenseScan, args: [recent: true], every: "0 * * * *")
     end
   end
@@ -195,7 +197,14 @@ defmodule ReactiveDagDashboard.FixtureGraph do
         do: Ash.destroy!(row)
 
     for {k, cat, amt} <- [{"e1", "travel", 500.0}, {"e2", "meals", 40.0}] do
-      Expenses |> Ash.Changeset.for_create(:upsert, %{key: k, category: cat, amount: amt}) |> Ash.create!()
+      Expenses
+      |> Ash.Changeset.for_create(:upsert, %{
+        key: k,
+        category: cat,
+        amount: amt,
+        fiscal_year: if(k == "e1", do: "FY25", else: "FY24")
+      })
+      |> Ash.create!()
     end
 
     p = plan()

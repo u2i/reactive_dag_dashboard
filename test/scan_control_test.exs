@@ -162,4 +162,89 @@ defmodule ReactiveDagDashboard.ScanControlTest do
       refute html =~ "unreachable"
     end
   end
+
+  describe "the reprocess control" do
+    test "a sliceable cell offers one button per declared value" do
+      {_view, html} = drawer("expenses")
+
+      assert html =~ "reprocess"
+      assert html =~ "fiscal_year"
+      assert html =~ ~s|phx-value-value="FY25"|
+      assert html =~ ~s|phx-value-value="FY24"|
+    end
+
+    test "a cell declaring no slice gets no reprocess control" do
+      # offering one would imply a choice the node never said it had
+      {_view, html} = drawer("category_health")
+
+      refute html =~ "phx-click=\"reprocess\""
+    end
+
+    test "reprocessing a slice claims ONLY that slice's keys" do
+      # the message is not the evidence — watch what the drain actually claimed
+      test_pid = self()
+
+      :telemetry.attach(
+        "reprocess-claims",
+        [:reactive_dag, :drain, :step],
+        fn _e, _m, meta, _ -> send(test_pid, {:claimed, meta.cell, meta.step.claimed}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("reprocess-claims") end)
+
+      {view, _} = drawer("expenses")
+
+      html =
+        render_click(view, "reprocess", %{
+          "cell" => "expenses",
+          "column" => "fiscal_year",
+          "value" => "FY25"
+        })
+
+      assert html =~ "reprocessed expenses (fiscal_year = FY25)"
+
+      # e1 is the only FY25 row; e2 (FY24) must not be claimed
+      assert_received {:claimed, "expenses", ["e1"]}
+    end
+
+    test "the whole-cell button says what it is" do
+      {view, _} = drawer("expenses")
+
+      test_pid = self()
+
+      :telemetry.attach(
+        "reprocess-all-claims",
+        [:reactive_dag, :drain, :step],
+        fn _e, _m, meta, _ -> send(test_pid, {:claimed, meta.cell, meta.step.claimed}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("reprocess-all-claims") end)
+
+      html = render_click(view, "reprocess", %{"cell" => "expenses"})
+
+      assert html =~ "reprocessed expenses (whole cell)"
+      assert_received {:claimed, "expenses", ["*"]}
+    end
+
+    test "it drains, so downstream actually recomputes" do
+      test_pid = self()
+
+      :telemetry.attach(
+        "reprocess-drain",
+        [:reactive_dag, :drain, :step],
+        fn _e, _m, meta, _ -> send(test_pid, {:step, meta.cell}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach("reprocess-drain") end)
+
+      {view, _} = drawer("expenses")
+      render_click(view, "reprocess", %{"cell" => "expenses", "column" => "fiscal_year", "value" => "FY25"})
+
+      assert_received {:step, "expenses"}
+      assert_received {:step, "category_health"}
+    end
+  end
 end

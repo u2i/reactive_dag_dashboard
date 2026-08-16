@@ -95,21 +95,23 @@ defmodule ReactiveDagDashboard.Layouts do
                           padding: 0 .25rem; opacity: .8; }
 
           /* the hierarchy: structure drawn with rails, algebra named on the
-             node. A DAG is not a tree, so a converging cell expands once and
-             its other arrivals are drawn as references rather than repeated. */
+             node. A converging cell is drawn under every route that reaches
+             it, subtree and all. */
+          /* `.rdd li` (a bordered pill) is 0,1,1 and beats a bare `.rdd-hier-row`
+             at 0,1,0 — so `border: 0` here silently never applied and every row
+             rendered as a full-width box, which also swallowed the indent. Match
+             the element too, so this wins on specificity rather than by luck. */
           .rdd-hier ol { list-style: none; margin: .25rem 0 0; padding: 0;
                          display: flex; flex-direction: column; gap: .0625rem; }
-          /* the rail glyph sits INSIDE the indent step, so a child's name lands
-             one full step right of its parent's. Adding the glyph on top of the
-             indent put a depth-2 row level with a depth-1 sibling's text, which
-             reads as a sibling — the exact confusion this view exists to remove. */
-          .rdd-hier-row { display: flex; align-items: baseline; gap: .375rem;
-                          border: 0; padding: .1875rem 0;
-                          padding-left: calc(var(--indent) * 1.5rem); }
-          .rdd-hier-row a { color: inherit; font-weight: 500; }
-          .rdd-branch { opacity: .35; font-family: ui-monospace, monospace;
-                        flex: none; width: 1.25rem; margin-left: -1.5rem;
-                        text-align: left; }
+          .rdd-hier li.rdd-hier-row { display: flex; align-items: baseline;
+                                      gap: .375rem; border: 0; border-radius: 0;
+                                      padding: .1875rem 0 .1875rem
+                                        calc(var(--indent) * 1.5rem); }
+          .rdd-hier li.rdd-hier-row a { color: inherit; font-weight: 500; }
+          /* the glyph sits in its own fixed column at the indent's left edge, so
+             a child's NAME lands one full step right of its parent's */
+          .rdd-hier .rdd-branch { opacity: .35; flex: none; width: 1.125rem;
+                                  font-family: ui-monospace, monospace; }
           /* the operator, which IS the relationship — not decoration */
           .rdd-op { font-size: .6875rem; opacity: .75; font-family: ui-monospace, monospace;
                     border: 1px solid currentColor; border-radius: .25rem;

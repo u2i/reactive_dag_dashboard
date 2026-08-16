@@ -169,7 +169,14 @@ defmodule ReactiveDagDashboard.FixtureGraph do
       # archive that is down and therefore reports nothing new
       changed = if unreachable == [], do: ["e1"], else: []
 
-      {:ok, %{changed: changed, unreachable: unreachable}}
+      # a scanner that reconciles through the library passes its detail back, so
+      # the page can say WHAT changed rather than only how many
+      detail =
+        if changed == [],
+          do: %{created: [], updated: [], revived: [], retired: []},
+          else: %{created: ["e1"], updated: [], revived: [], retired: []}
+
+      {:ok, %{changed: changed, unreachable: unreachable, detail: detail}}
     end
   end
 

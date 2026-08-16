@@ -89,13 +89,13 @@ defmodule ReactiveDagDashboard.PageLive do
         :queued ->
           {"scan of #{cell_id} queued — results will appear as it drains", false}
 
-        {:ran, %{changed: changed, unreachable: []}} ->
-          {"scanned #{cell_id}: #{length(changed)} key(s) changed", true}
+        {:ran, %{unreachable: []} = result} ->
+          {"scanned #{cell_id}: #{summarise(result)}", true}
 
         # An outage is not a quiet success. A scan that could not look must not
         # render as a scan that found nothing — the honest gap, on screen.
-        {:ran, %{changed: changed, unreachable: up}} ->
-          {"scanned #{cell_id}: #{length(changed)} changed, #{length(up)} upstream(s) " <>
+        {:ran, %{unreachable: up} = result} ->
+          {"scanned #{cell_id}: #{summarise(result)}, #{length(up)} upstream(s) " <>
              "unreachable — results are incomplete", true}
 
         :no_scanner ->
@@ -165,6 +165,26 @@ defmodule ReactiveDagDashboard.PageLive do
   # having also set `config :reactive_dag, plan_mfa:`.
   defp put_plan(args, {m, f, a}),
     do: Map.put(args, "plan_mfa", [to_string(m), to_string(f), a])
+
+  # `detail` says WHY each key changed, which is the difference between "4 keys
+  # changed" and "2 new, 1 updated, 1 withdrawn". A scanner only has it if it
+  # reconciles through the library and passes it back, so fall back to the count.
+  defp summarise(%{detail: %{} = d}) do
+    case Enum.reject(
+           [
+             {length(d.created), "new"},
+             {length(d.updated), "updated"},
+             {length(d.revived), "returned"},
+             {length(d.retired), "withdrawn"}
+           ],
+           fn {n, _} -> n == 0 end
+         ) do
+      [] -> "nothing changed"
+      parts -> Enum.map_join(parts, ", ", fn {n, label} -> "#{n} #{label}" end)
+    end
+  end
+
+  defp summarise(%{changed: changed}), do: "#{length(changed)} key(s) changed"
 
   defp scan_opts("full", control), do: full_scan_opts(control)
   defp scan_opts(_default, _control), do: []

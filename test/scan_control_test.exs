@@ -108,7 +108,8 @@ defmodule ReactiveDagDashboard.ScanControlTest do
       html = render_click(view, "scan", %{"cell" => "expenses", "mode" => "default"})
 
       assert html =~ "scanned expenses"
-      assert html =~ "1 key(s) changed"
+      # the detail turns "1 key(s) changed" into what actually happened
+      assert html =~ "1 new"
     end
 
     test "a cell with no scanner says so rather than failing" do
@@ -117,6 +118,24 @@ defmodule ReactiveDagDashboard.ScanControlTest do
       html = render_click(view, "scan", %{"cell" => "category_health", "mode" => "default"})
 
       assert html =~ "has no scanner"
+    end
+  end
+
+  describe "reporting what a scan did" do
+    test "a scanner without detail falls back to a count" do
+      {view, _} = drawer("expenses")
+      html = render_click(view, "scan", %{"cell" => "expenses", "mode" => "default"})
+
+      # this fixture DOES report detail, so it says what rather than how many
+      refute html =~ "key(s) changed"
+    end
+
+    test "a scan that changed nothing says so plainly" do
+      # the deep pass reaches a downed archive: no keys, and detail all empty
+      {view, _} = drawer("expenses")
+      html = render_click(view, "scan", %{"cell" => "expenses", "mode" => "full"})
+
+      assert html =~ "nothing changed"
     end
   end
 

@@ -17,10 +17,34 @@ defmodule ReactiveDagDashboard.Layouts do
   trade was a dashboard that could never match the app around it, and a
   hand-maintained stylesheet growing a component at a time.
 
-  `:root_layout` is overridable, so a host that wants its own chrome (a nav bar,
-  a user menu) passes theirs and this is never used.
+  ## Getting the stylesheet onto the page
+
+  This layout links the host's compiled CSS, named in config:
+
+      config :reactive_dag_dashboard, css_path: "/assets/app.css"
+
+  Read at RENDER time rather than taken as an assign: `:root_layout` is a
+  `{module, template}` tuple with no slot for assigns, so a root layout cannot
+  be handed a value through the router. Config is the only channel that reaches
+  here.
+
+  Without it the page renders unstyled — which is what shipped in the first
+  version of this: the layout tested `assigns[:css_path]`, nothing ever put it
+  there, and no option existed to (u2i/reactive_dag_dashboard#18).
+
+  A host mounting inside its own authenticated scope usually wants its own
+  chrome instead — a nav bar, a user menu. Pass `:root_layout` to
+  `reactive_dag_dashboard/2` and this layout is never used.
   """
   use Phoenix.Component
+
+  @doc """
+  The host's stylesheet path, or `nil`.
+
+  A function rather than an assign because a root layout has no assigns to
+  receive one through.
+  """
+  def css_path, do: Application.get_env(:reactive_dag_dashboard, :css_path)
 
   def root(assigns) do
     ~H"""
@@ -31,9 +55,7 @@ defmodule ReactiveDagDashboard.Layouts do
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="csrf-token" content={Phoenix.Controller.get_csrf_token()} />
         <title>reactive_dag</title>
-        <%= if assigns[:css_path] do %>
-          <link phx-track-static rel="stylesheet" href={@css_path} />
-        <% end %>
+        <link :if={css_path()} phx-track-static rel="stylesheet" href={css_path()} />
       </head>
       <body>
         <%= @inner_content %>

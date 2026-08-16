@@ -37,10 +37,28 @@ no CSS. Add it to your `app.css`:
 ```css
 @import "tailwindcss";
 @plugin "daisyui";
+
+/* Tailwind must SEE this dependency's markup to compile the classes it uses */
+@source "../deps/reactive_dag_dashboard";
 ```
 
-That is a requirement, not a nicety — without it the page renders unstyled
-rather than degraded.
+Then tell the dashboard where that compiled CSS lives:
+
+```elixir
+config :reactive_dag_dashboard, css_path: "/assets/app.css"
+```
+
+Or, if the dashboard sits inside an admin shell that already has a `<head>`,
+give it your own chrome instead and skip the config:
+
+```elixir
+reactive_dag_dashboard "/admin/dag",
+  plan: {MyApp.Dag, :plan, []},
+  root_layout: {MyAppWeb.Layouts, :admin}
+```
+
+All three steps are needed for the first shape: without `@source` the classes
+are never compiled, and without `css_path` the stylesheet is never linked.
 
 It used to ship its own inline stylesheet so that mounting never touched the
 host's assets. The trade was a dashboard that could never match the app around

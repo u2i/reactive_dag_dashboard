@@ -34,12 +34,14 @@ defmodule ReactiveDagDashboard.LayoutTest do
 
     prev_repo = Application.get_env(:reactive_dag, :repo)
     prev_css = Application.get_env(:reactive_dag_dashboard, :css_path)
+    prev_js = Application.get_env(:reactive_dag_dashboard, :js_path)
 
     Application.put_env(:reactive_dag, :repo, ReactiveDagDashboard.FakeRepo)
 
     on_exit(fn ->
       Application.put_env(:reactive_dag, :repo, prev_repo)
       Application.put_env(:reactive_dag_dashboard, :css_path, prev_css)
+      Application.put_env(:reactive_dag_dashboard, :js_path, prev_js)
     end)
 
     FixtureGraph.seed()
@@ -79,6 +81,57 @@ defmodule ReactiveDagDashboard.LayoutTest do
     {:ok, _view, html} = live(build_conn(), @path)
 
     assert html =~ "reactive_dag"
+  end
+
+  describe "the JS bundle — without it, nothing is clickable" do
+    # The page is `phx-click` throughout: selecting a node, toggling direction,
+    # running a scan or a reprocess. With no <script> the LiveSocket never
+    # connects, so it renders, looks right, and does nothing — which reads as
+    # "the dashboard only knows about one source" (u2i/reactive_dag_dashboard#21).
+    test "the configured bundle is loaded" do
+      Application.put_env(:reactive_dag_dashboard, :js_path, "/assets/app.js")
+
+      {:ok, _view, html} = live(build_conn(), @path)
+
+      assert html =~ ~s|src="/assets/app.js"|
+    end
+
+    test "deferred, so it does not block the first paint" do
+      Application.put_env(:reactive_dag_dashboard, :js_path, "/assets/app.js")
+
+      {:ok, _view, html} = live(build_conn(), @path)
+
+      assert html =~ "defer"
+      assert html =~ "phx-track-static"
+    end
+
+    test "with none configured, no empty script tag is emitted" do
+      Application.put_env(:reactive_dag_dashboard, :js_path, nil)
+
+      {:ok, _view, html} = live(build_conn(), @path)
+
+      refute html =~ "<script"
+    end
+
+    test "the page still renders without it — static, not broken" do
+      Application.put_env(:reactive_dag_dashboard, :js_path, nil)
+
+      {:ok, _view, html} = live(build_conn(), @path)
+
+      assert html =~ "reactive_dag"
+    end
+
+    test "CSS and JS are independent — one configured, the other not" do
+      # they were reported as separate bugs because from a browser both look
+      # like "the dashboard is broken"
+      Application.put_env(:reactive_dag_dashboard, :css_path, "/assets/app.css")
+      Application.put_env(:reactive_dag_dashboard, :js_path, nil)
+
+      {:ok, _view, html} = live(build_conn(), @path)
+
+      assert html =~ ~s|href="/assets/app.css"|
+      refute html =~ "<script"
+    end
   end
 
   describe ":root_layout — the host's own chrome" do

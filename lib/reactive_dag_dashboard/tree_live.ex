@@ -22,7 +22,7 @@ defmodule ReactiveDagDashboard.TreeLive do
   use Phoenix.LiveView
 
   alias ReactiveDag.Insights
-  alias ReactiveDagDashboard.Tree
+  alias ReactiveDagDashboard.{Algebra, Tree}
 
   alias ReactiveDagDashboard.LiveUpdates
 
@@ -87,7 +87,12 @@ defmodule ReactiveDagDashboard.TreeLive do
   end
 
   defp assign_tree(%{assigns: %{selected: nil}} = socket),
-    do: socket |> assign(:rows, []) |> assign(:levels, []) |> assign(:paths, 0)
+    do:
+      socket
+      |> assign(:rows, [])
+      |> assign(:levels, [])
+      |> assign(:tree_rows, [])
+      |> assign(:paths, 0)
 
   defp assign_tree(%{assigns: %{plan: plan, selected: id, direction: dir}} = socket) do
     tree = if dir == :upstream, do: Tree.upstream(plan, id), else: Tree.downstream(plan, id)
@@ -95,6 +100,7 @@ defmodule ReactiveDagDashboard.TreeLive do
     socket
     |> assign(:rows, Tree.flatten(tree))
     |> assign(:levels, Tree.levels(plan, tree))
+    |> assign(:tree_rows, Tree.hierarchy(plan, tree))
     |> assign(:paths, Tree.path_count(tree))
   end
 
@@ -102,7 +108,8 @@ defmodule ReactiveDagDashboard.TreeLive do
   # question, and the exploded shape answers a different one (what does this
   # change COST) at the price of a row per route.
   defp shape(%{"shape" => "paths"}), do: :paths
-  defp shape(_), do: :cells
+  defp shape(%{"shape" => "cells"}), do: :cells
+  defp shape(_), do: :tree
 
   # with no cell named, start somewhere useful rather than blank: the first
   # place a change enters (downstream) or the last place it lands (upstream).
@@ -154,14 +161,58 @@ defmodule ReactiveDagDashboard.TreeLive do
         This graph has no <%= picker_label(@direction) %>.
       </p>
 
+      <section :if={@selected && @shape == :tree} class="rdd-hier">
+        <h2>
+          <%= @paths %> <%= if @paths == 1, do: "route", else: "routes" %>
+          <span class="rdd-note">
+            structure, with each cell expanded once —
+            <.link patch={"#{@base_path}#{segment(@direction)}/#{@selected}?shape=cells"}>
+              flat list by distance
+            </.link>
+          </span>
+        </h2>
+
+        <ol>
+          <li :for={row <- @tree_rows} class={hier_class(row)} style={"--indent: #{row.depth}"}>
+            <span class="rdd-branch" aria-hidden="true"><%= branch(row) %></span>
+
+            <.link patch={"#{@base_path}#{segment(@direction)}/#{row.id}"}><%= row.id %></.link>
+
+            <span :if={op_label(row)} class="rdd-op"><%= op_label(row) %></span>
+
+            <span :if={input_role(@plan, @direction, row)} class="rdd-role">
+              <%= input_role(@plan, @direction, row) %>
+            </span>
+
+            <span :if={op_detail(row)} class="rdd-detail"><%= op_detail(row) %></span>
+
+            <span :if={row.ref?} class="rdd-badge rdd-ref" title="expanded elsewhere on this page">
+              also from <%= Enum.join(row.arrivals -- [row.via], ", ") %>
+            </span>
+
+            <span :if={not row.ref? && row.routes > 1} class="rdd-badge rdd-converge">
+              <%= row.routes %> routes in
+            </span>
+
+            <span :if={row.cyclic?} class="rdd-badge rdd-cyclic">cycle</span>
+
+            <span :if={not row.ref?} class="rdd-count"><%= key_count(@status[row.id]) %></span>
+
+            <span :for={{status, n} <- if(row.ref?, do: [], else: statuses(@status[row.id]))} class="rdd-status">
+              <%= status %>&nbsp;<%= n %>
+            </span>
+          </li>
+        </ol>
+      </section>
+
       <section :if={@selected && @shape == :cells} class="rdd-bands">
         <h2>
           <%= cell_total(@levels) %> cells over <%= @paths %>
           <%= if @paths == 1, do: "route", else: "routes" %>
           <span class="rdd-note">
             one row per cell —
-            <.link patch={"#{@base_path}#{segment(@direction)}/#{@selected}?shape=paths"}>
-              show every route instead
+            <.link patch={"#{@base_path}#{segment(@direction)}/#{@selected}"}>
+              back to the hierarchy
             </.link>
           </span>
         </h2>
@@ -243,6 +294,37 @@ defmodule ReactiveDagDashboard.TreeLive do
 
   defp nonempty("", fallback), do: fallback
   defp nonempty(path, _fallback), do: path
+
+  # The algebra, read off the cell's own `reactive` block. A flat `inputs` list
+  # makes every edge look alike, and they are not: a join's left and right are
+  # not interchangeable, a union's inputs are alternatives. The operator IS the
+  # relationship, so it belongs on the node.
+  defp op_label(%{ref?: true}), do: nil
+  defp op_label(row), do: Algebra.label(row.cell)
+
+  defp op_detail(%{ref?: true}), do: nil
+  defp op_detail(row), do: Algebra.detail(row.cell)
+
+  # The role is a property of the EDGE, declared by whichever end CONSUMES the
+  # other. Going downstream this row consumes `via`; going upstream `via`
+  # consumes this row. Asking the producer instead yields nothing silently — it
+  # never declared the relationship.
+  defp input_role(_plan, _dir, %{via: nil}), do: nil
+  defp input_role(_plan, _dir, %{ref?: true}), do: nil
+
+  defp input_role(plan, :upstream, row),
+    do: plan.cells[row.via] |> Algebra.roles() |> Map.get(row.id)
+
+  defp input_role(plan, _downstream, row),
+    do: plan.cells[row.id] |> Algebra.roles() |> Map.get(row.via)
+
+  defp hier_class(%{ref?: true}), do: "rdd-row rdd-hier-row rdd-ref-row"
+  defp hier_class(%{cyclic?: true}), do: "rdd-row rdd-hier-row rdd-cyclic-row"
+  defp hier_class(_), do: "rdd-row rdd-hier-row"
+
+  defp branch(%{depth: 0}), do: ""
+  defp branch(%{last?: true}), do: "└─"
+  defp branch(_), do: "├─"
 
   defp cell_total(levels), do: levels |> Enum.map(fn {_d, rows} -> length(rows) end) |> Enum.sum()
 

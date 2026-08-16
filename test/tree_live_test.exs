@@ -29,18 +29,57 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
       assert html =~ "expenses"
     end
 
+    test "the default is a hierarchy: children under parents" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+
+      # the structure is drawn, not implied by a `via` string in another band
+      assert html =~ "└─" or html =~ "├─"
+    end
+
+    test "it names the OPERATION each cell performs" do
+      # the relationship is the operator: an edge into a union means something
+      # different from an edge into a reduce, and a flat arrow says neither
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+
+      assert html =~ "reduce by :category"
+      assert html =~ "union"
+      assert html =~ "per_key :describe"
+    end
+
+    test "and what each input IS to its parent" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+
+      assert html =~ "alternative", "a union's inputs are alternatives to each other"
+      assert html =~ "folded", "a reduce folds its input"
+    end
+
+    test "a per_key shows what it compares" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+
+      assert html =~ "fingerprint :amount"
+    end
+
+    test "a converging cell is expanded once and referenced once" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+
+      # both edges drawn — the second says where else it arrives from, rather
+      # than repeating the subtree or vanishing into a band
+      assert html =~ "also from"
+      assert html =~ "2 routes in"
+    end
+
     test "by default a shared cell appears ONCE" do
       # the complaint this fixes: following a source meant reading the same cell
       # name repeatedly down an indented list, losing your place at every
       # convergence
-      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses?shape=cells")
 
       rows = Regex.scan(~r/rdd-cell[^>]*>\s*<a[^>]*>all_verdicts</s, html)
       assert length(rows) == 1
     end
 
     test "and states the routes that collapsed into it" do
-      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses?shape=cells")
 
       # convergence becomes a fact on the row instead of a duplicate row
       assert html =~ "2 routes"
@@ -48,7 +87,7 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
     end
 
     test "the default counts cells AND routes, so neither is hidden" do
-      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses?shape=cells")
 
       # HEEx emits the interpolations across newlines, so match on the pieces
       assert html =~ ~r/5\s+cells over\s+3\s+routes/
@@ -56,7 +95,7 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
 
     test "bands are named for what the distance means" do
       # "2 hops" says nothing; this is the thing you were tracking
-      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses?shape=cells")
 
       assert html =~ "the source"
       assert html =~ "recomputes directly"
@@ -64,18 +103,21 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
     end
 
     test "upstream names its bands the other way round" do
-      {:ok, _view, html} = live(build_conn(), "#{@path}/into/all_verdicts")
+      {:ok, _view, html} = live(build_conn(), "#{@path}/into/all_verdicts?shape=cells")
 
       assert html =~ "this table"
       assert html =~ "fed directly by"
     end
 
-    test "each shape links to the other" do
-      {:ok, _view, collapsed} = live(build_conn(), "#{@path}/from/expenses")
-      assert collapsed =~ "show every route instead"
+    test "each shape links to the others" do
+      {:ok, _view, cells} = live(build_conn(), "#{@path}/from/expenses?shape=cells")
+      assert cells =~ "back to the hierarchy"
 
       {:ok, _view, exploded} = live(build_conn(), "#{@path}/from/expenses?shape=paths")
       assert exploded =~ "collapse to one row per cell"
+
+      {:ok, _view, tree} = live(build_conn(), "#{@path}/from/expenses")
+      assert tree =~ "flat list by distance"
     end
 
     test "the shared cell appears ONCE PER PATH in the rendered page" do

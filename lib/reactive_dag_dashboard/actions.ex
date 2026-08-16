@@ -67,8 +67,19 @@ defmodule ReactiveDagDashboard.Actions do
     end
   end
 
+  # `Oban.whereis/1`, not `Process.whereis(Oban)`.
+  #
+  # Oban does not register a process under the bare name — it supervises through
+  # `Oban.Registry`, so `Process.whereis(Oban)` is nil in a perfectly healthy
+  # app. The check reported Oban absent while Oban was running, both actions
+  # fell through to their synchronous branch, and the buttons did nothing
+  # visible (u2i/reactive_dag_dashboard#25).
+  #
+  # `whereis/1` is the documented way to ask and returns a pid or nil, so no
+  # rescue is needed for "not running" — only for Oban not being loaded at all,
+  # which is a real case since it is an optional dependency.
   def oban_running? do
-    is_pid(Process.whereis(Oban))
+    Code.ensure_loaded?(Oban) and not is_nil(Oban.whereis(Oban))
   rescue
     _ -> false
   end

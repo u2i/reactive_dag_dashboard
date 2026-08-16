@@ -17,11 +17,18 @@ defmodule ReactiveDagDashboard.Layouts do
   trade was a dashboard that could never match the app around it, and a
   hand-maintained stylesheet growing a component at a time.
 
-  ## Getting the stylesheet onto the page
+  ## Getting the assets onto the page
 
   This layout links the host's compiled CSS, named in config:
 
-      config :reactive_dag_dashboard, css_path: "/assets/app.css"
+      config :reactive_dag_dashboard,
+        css_path: "/assets/app.css",
+        js_path: "/assets/app.js"
+
+  BOTH are needed. Without the CSS the page is unstyled; without the JS the
+  LiveSocket never connects, so the page is static HTML and nothing on it is
+  clickable — and from a browser those two look the same ("the dashboard is
+  broken"), which is why they were reported as separate bugs.
 
   Read at RENDER time rather than taken as an assign: `:root_layout` is a
   `{module, template}` tuple with no slot for assigns, so a root layout cannot
@@ -46,6 +53,16 @@ defmodule ReactiveDagDashboard.Layouts do
   """
   def css_path, do: Application.get_env(:reactive_dag_dashboard, :css_path)
 
+  @doc """
+  The host's JavaScript bundle, or `nil`.
+
+  Without it the LiveSocket never connects and the page is STATIC HTML — it
+  renders, it looks right, and every `phx-click` on it is inert. Which is most
+  of the page: selecting a node, toggling direction, running a scan or a
+  reprocess.
+  """
+  def js_path, do: Application.get_env(:reactive_dag_dashboard, :js_path)
+
   def root(assigns) do
     ~H"""
     <!DOCTYPE html>
@@ -56,6 +73,8 @@ defmodule ReactiveDagDashboard.Layouts do
         <meta name="csrf-token" content={Phoenix.Controller.get_csrf_token()} />
         <title>reactive_dag</title>
         <link :if={css_path()} phx-track-static rel="stylesheet" href={css_path()} />
+        <script :if={js_path()} defer phx-track-static type="text/javascript" src={js_path()}>
+        </script>
       </head>
       <body>
         <%= @inner_content %>

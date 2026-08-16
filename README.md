@@ -42,11 +42,19 @@ no CSS. Add it to your `app.css`:
 @source "../deps/reactive_dag_dashboard";
 ```
 
-Then tell the dashboard where that compiled CSS lives:
+Then tell the dashboard where your compiled assets live:
 
 ```elixir
-config :reactive_dag_dashboard, css_path: "/assets/app.css"
+config :reactive_dag_dashboard,
+  css_path: "/assets/app.css",
+  js_path: "/assets/app.js"
 ```
+
+**Both are needed.** Without the CSS the page is unstyled; without the JS the
+LiveSocket never connects, so the page is static HTML and nothing on it is
+clickable — no selecting a node, no direction toggle, no scan or reprocess
+buttons. From a browser those two failures look identical ("the dashboard is
+broken"), so it is worth checking both are set before looking anywhere else.
 
 Or, if the dashboard sits inside an admin shell that already has a `<head>`,
 give it your own chrome instead and skip the config:

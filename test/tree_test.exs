@@ -30,7 +30,13 @@ defmodule ReactiveDagDashboard.TreeTest do
       # all_verdicts appears TWICE — once per route through the diamond
       assert Enum.count(ids, &(&1 == "all_verdicts")) == 2
       assert Enum.sort(Enum.uniq(ids)) ==
-               ["all_verdicts", "category_health", "expenses", "spend_rollup"]
+               [
+                 "all_verdicts",
+                 "category_health",
+                 "expense_notes",
+                 "expenses",
+                 "spend_rollup"
+               ]
     end
 
     test "the second occurrence is flagged as a repeat, the first is not", %{plan: plan} do
@@ -58,8 +64,10 @@ defmodule ReactiveDagDashboard.TreeTest do
     end
 
     test "path_count/1 counts routes, not cells", %{plan: plan} do
-      # two ways for a change to reach the tip
-      assert plan |> Tree.downstream("expenses") |> Tree.path_count() == 2
+      # two ways round the diamond to `all_verdicts`, plus the direct edge to
+      # `expense_notes` — three routes over five cells, which is the whole point
+      # of counting routes
+      assert plan |> Tree.downstream("expenses") |> Tree.path_count() == 3
     end
 
     test "a sink has no downstream", %{plan: plan} do
@@ -80,10 +88,24 @@ defmodule ReactiveDagDashboard.TreeTest do
     end
 
     test "it is the mirror of downstream, not a different graph", %{plan: plan} do
-      down = plan |> Tree.downstream("expenses") |> Tree.path_count()
-      up = plan |> Tree.upstream("all_verdicts") |> Tree.path_count()
+      # Mirroring is a claim about the routes BETWEEN two cells, not the totals
+      # at each end: `expenses` also feeds `expense_notes`, a route that never
+      # reaches this tip. Comparing whole subtrees would set a fan-out against a
+      # fan-in and read the difference as a bug.
+      down =
+        plan
+        |> Tree.downstream("expenses")
+        |> Tree.flatten()
+        |> Enum.count(&(&1.id == "all_verdicts"))
+
+      up =
+        plan
+        |> Tree.upstream("all_verdicts")
+        |> Tree.flatten()
+        |> Enum.count(&(&1.id == "expenses"))
 
       assert down == up
+      assert down == 2, "the diamond has two routes, whichever end you count from"
     end
 
     test "a leaf has no upstream", %{plan: plan} do
@@ -106,7 +128,7 @@ defmodule ReactiveDagDashboard.TreeTest do
     end
 
     test "sinks/1 finds the cells nothing consumes", %{plan: plan} do
-      assert Tree.sinks(plan) == ["all_verdicts"]
+      assert Tree.sinks(plan) == ["all_verdicts", "expense_notes"]
     end
   end
 

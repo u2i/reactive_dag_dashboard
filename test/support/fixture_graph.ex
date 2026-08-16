@@ -147,6 +147,71 @@ defmodule ReactiveDagDashboard.FixtureGraph do
     end
   end
 
+  # A FINGERPRINTED node — the shape a reprocess has to defeat.
+  #
+  # `per_key` skips rows whose declared inputs have not moved, and after a prompt
+  # change they have not. So a reprocess that only marks claims the keys and
+  # changes nothing. Without a node of this shape in the fixture, the page's
+  # reprocess control could be wired to a no-op and every test would still pass.
+  defmodule ExpenseNotes do
+    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets, extensions: [ReactiveDag.Node]
+
+    ets do
+    end
+
+    attributes do
+      attribute :key, :string, primary_key?: true, allow_nil?: false, public?: true
+      attribute :fiscal_year, :string, public?: true
+      attribute :note, :string, public?: true
+      attribute :fingerprint, :string, public?: true
+    end
+
+    actions do
+      defaults [:read, :destroy, update: [:note, :fingerprint, :fiscal_year]]
+
+      create :upsert do
+        upsert?(true)
+        accept([:key, :fiscal_year, :note, :fingerprint])
+      end
+
+      action :describe, :map do
+        argument :amount, :float, allow_nil?: true
+        argument :fiscal_year, :string, allow_nil?: true
+
+        run fn input, _ ->
+          ReactiveDagDashboard.FixtureGraph.Notes.record(input.arguments.amount)
+
+          {:ok,
+           %{
+             "note" => "spent #{input.arguments.amount}",
+             "fiscal_year" => input.arguments.fiscal_year
+           }}
+        end
+      end
+    end
+
+    reactive do
+      id(:expense_notes)
+      recompute_by(:key, to: :expenses, from: :key)
+      slice(:fiscal_year, values: ["FY24", "FY25"])
+
+      per_key(:describe,
+        args: [amount: :amount, fiscal_year: :fiscal_year],
+        fingerprint: [:amount],
+        into: [note: :note, fiscal_year: :fiscal_year]
+      )
+    end
+  end
+
+  # Counts how many times the per_key action actually ran, which is the only
+  # honest evidence that a reprocess did work rather than merely claiming keys.
+  defmodule Notes do
+    def start_link, do: Agent.start_link(fn -> [] end, name: __MODULE__)
+    def record(v), do: if(Process.whereis(__MODULE__), do: Agent.update(__MODULE__, &[v | &1]))
+    def calls, do: Agent.get(__MODULE__, &Enum.reverse/1)
+    def reset, do: Agent.update(__MODULE__, fn _ -> [] end)
+  end
+
   defmodule ExpenseScan do
     @behaviour ReactiveDag.Source
 
@@ -183,7 +248,9 @@ defmodule ReactiveDagDashboard.FixtureGraph do
   end
 
   @doc "The plan, as the router's `:plan` MFA would return it."
-  def plan, do: ReactiveDag.Node.graph([Expenses, CategoryHealth, SpendRollup, AllVerdicts])
+  def plan,
+    do:
+      ReactiveDag.Node.graph([Expenses, CategoryHealth, SpendRollup, AllVerdicts, ExpenseNotes])
 
   # recompute/2 returns {:ok, changed} or {:ok, changed, meta} depending on the
   # node shape; normalise so the seed does not care which.
@@ -192,7 +259,7 @@ defmodule ReactiveDagDashboard.FixtureGraph do
 
   @doc "Seed every cell so the page has real rows to report."
   def seed do
-    for r <- [Expenses, CategoryHealth, SpendRollup, AllVerdicts],
+    for r <- [Expenses, CategoryHealth, SpendRollup, AllVerdicts, ExpenseNotes],
         row <- Ash.read!(r),
         do: Ash.destroy!(row)
 
@@ -209,7 +276,7 @@ defmodule ReactiveDagDashboard.FixtureGraph do
 
     p = plan()
 
-    for id <- ["category_health", "spend_rollup", "all_verdicts"] do
+    for id <- ["category_health", "spend_rollup", "all_verdicts", "expense_notes"] do
       {:ok, _, _} = maybe_meta(ReactiveDag.Node.Recompute.recompute(p.cells[id], ["*"]))
     end
 

@@ -163,6 +163,63 @@ defmodule ReactiveDagDashboard.ScanControlTest do
     end
   end
 
+  describe "reprocessing a fingerprinted node" do
+    # The bug this guards: `per_key` skips rows whose declared inputs have not
+    # moved, and after a code change they have not. So a reprocess that only
+    # MARKS claims the keys and re-runs nothing — the button works and nothing
+    # happens. The library's worker clears the stored fingerprint first; this
+    # page must go through it rather than reimplementing the marking, which is
+    # exactly how it lost that step once already.
+    setup do
+      start_supervised!(%{
+        id: FixtureGraph.Notes,
+        start: {FixtureGraph.Notes, :start_link, []}
+      })
+
+      FixtureGraph.Notes.reset()
+      :ok
+    end
+
+    test "the action actually runs again" do
+      {view, _} = drawer("expense_notes")
+
+      html = render_click(view, "reprocess", %{"cell" => "expense_notes"})
+
+      assert FixtureGraph.Notes.calls() != [],
+             "the fingerprint was not cleared, so every claimed row was skipped"
+
+      assert html =~ "reprocessed expense_notes"
+    end
+
+    test "a slice re-runs only its slice" do
+      {view, _} = drawer("expense_notes")
+
+      render_click(view, "reprocess", %{
+        "cell" => "expense_notes",
+        "column" => "fiscal_year",
+        "value" => "FY25"
+      })
+
+      # e1 is the FY25 row, at 500.0; e2 (FY24, 40.0) must not be re-described
+      assert FixtureGraph.Notes.calls() == [500.0]
+    end
+
+    test "the message reports how many were freed to re-run" do
+      {view, _} = drawer("expense_notes")
+
+      html =
+        render_click(view, "reprocess", %{
+          "cell" => "expense_notes",
+          "column" => "fiscal_year",
+          "value" => "FY25"
+        })
+
+      # "changed" alone cannot separate "nothing needed redoing" from "the
+      # request never reached the rows"
+      assert html =~ "1 re-run"
+    end
+  end
+
   describe "the reprocess control" do
     test "a sliceable cell offers one button per declared value" do
       {_view, html} = drawer("expenses")

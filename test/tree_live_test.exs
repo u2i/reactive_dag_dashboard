@@ -56,7 +56,7 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
     test "the path count is stated, and counts routes not cells" do
       {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
 
-      assert html =~ "2 paths"
+      assert html =~ "3 paths"
     end
 
     test "live state rides along, so a path shows what each cell holds" do

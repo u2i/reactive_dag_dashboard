@@ -121,7 +121,8 @@ defmodule ReactiveDagDashboard.PageLive do
     message =
       case run_reprocess(args, socket.assigns.plan, cell_id, params) do
         :queued -> "reprocess of #{describe(cell_id, params)} queued"
-        {:ran, n} -> "reprocessed #{describe(cell_id, params)}: #{n} key(s) changed"
+        {:ran, m} -> "reprocessed #{describe(cell_id, params)}: #{outcome(m)}"
+        :nothing_selected -> "nothing to reprocess in #{describe(cell_id, params)}"
         {:error, reason} -> "reprocess failed: #{inspect(reason)}"
       end
 
@@ -211,44 +212,73 @@ defmodule ReactiveDagDashboard.PageLive do
   defp describe(cell_id, %{"column" => c, "value" => v}), do: "#{cell_id} (#{c} = #{v})"
   defp describe(cell_id, _params), do: "#{cell_id} (whole cell)"
 
+  # `changed` alone cannot distinguish "nothing needed redoing" from "the request
+  # never reached the rows". Saying how many were freed to re-run alongside how
+  # many moved makes a genuine no-op readable as one.
+  defp outcome(%{changed: changed} = m) do
+    case m[:invalidated] do
+      n when is_integer(n) and n > 0 -> "#{n} re-run, #{changed} changed"
+      _ -> "#{changed} changed"
+    end
+  end
+
+  defp outcome(_), do: "done"
+
   # Queue it when Oban is there — a reprocess can drain a large subtree, and
-  # blocking the LiveView on it would look hung. Without Oban, do it here: the
-  # marking and draining are the same either way.
-  defp run_reprocess(args, plan, cell_id, params) do
-    if Code.ensure_loaded?(ReactiveDag.ReprocessWorker) and oban_running?() do
-      case args |> ReactiveDag.ReprocessWorker.new() |> Oban.insert() do
-        {:ok, _job} -> :queued
-        {:error, reason} -> {:error, reason}
+  # blocking the LiveView on it would look hung.
+  #
+  # Without Oban, run the SAME worker inline rather than re-deriving what it
+  # does. That is not just less code: a reprocess has to clear the stored
+  # fingerprint before marking, or a `per_key` node skips the very rows it was
+  # asked to redo. This page reimplemented the marking once and silently missed
+  # that step — the button worked and nothing happened. A second copy of a rule
+  # this subtle is a copy that will drift again.
+  defp run_reprocess(args, _plan, _cell_id, _params) do
+    cond do
+      not Code.ensure_loaded?(ReactiveDag.ReprocessWorker) ->
+        {:error, :reprocess_worker_unavailable}
+
+      oban_running?() ->
+        case args |> ReactiveDag.ReprocessWorker.new() |> Oban.insert() do
+          {:ok, _job} -> :queued
+          {:error, reason} -> {:error, reason}
+        end
+
+      true ->
+        inline_reprocess(args)
+    end
+  end
+
+  # `perform/1` takes the job it would have been given. An inline run is
+  # synchronous, so listen to the worker's own telemetry for the duration and
+  # report what it measured rather than re-counting it here.
+  defp inline_reprocess(args) do
+    handler = "reactive-dag-dashboard-reprocess-#{inspect(self())}"
+    test_pid = self()
+
+    :telemetry.attach(
+      handler,
+      [:reactive_dag, :reprocess, :stop],
+      fn _e, measurements, _meta, _ -> send(test_pid, {:reprocess_stop, measurements}) end,
+      nil
+    )
+
+    try do
+      # `perform/1` returns `:ok` even for a cell absent from the plan — it logs
+      # and declines rather than failing a job that would fail identically on
+      # every retry. So the telemetry, not the return value, is what says
+      # whether anything happened; no event means nothing was selected.
+      :ok = ReactiveDag.ReprocessWorker.perform(%Oban.Job{args: args})
+
+      receive do
+        {:reprocess_stop, m} -> {:ran, m}
+      after
+        0 -> :nothing_selected
       end
-    else
-      inline_reprocess(plan, cell_id, params)
+    after
+      :telemetry.detach(handler)
     end
   end
-
-  defp inline_reprocess(plan, cell_id, params) do
-    cell = plan.cells[cell_id]
-    keys = reprocess_keys(cell, params)
-
-    ReactiveDag.Frontier.mark_dirty(cell_id, keys, "dashboard")
-
-    for {parent, parent_keys} <-
-          ReactiveDag.Graph.dirty_parents(plan, cell_id, keys, ReactiveDag.Node.KeyRule) do
-      ReactiveDag.Frontier.mark_dirty(parent, parent_keys, "dashboard")
-    end
-
-    {:ok, report} =
-      ReactiveDag.Drain.run(plan,
-        recompute: ReactiveDag.Node.Recompute,
-        key_rule: ReactiveDag.Node.KeyRule
-      )
-
-    {:ran, ReactiveDag.Drain.Report.changed_total(report)}
-  end
-
-  defp reprocess_keys(cell, %{"column" => c, "value" => v}),
-    do: ReactiveDag.Node.Rows.keys_where(cell, [{String.to_existing_atom(c), v}])
-
-  defp reprocess_keys(_cell, _params), do: ["*"]
 
   # What each cell declared a human may select it by. A cell that declared
   # nothing gets no reprocess control — offering one would imply a choice the

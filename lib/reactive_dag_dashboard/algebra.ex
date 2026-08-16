@@ -41,7 +41,9 @@ defmodule ReactiveDagDashboard.Algebra do
       pk = cell[:per_key] -> "per_key #{inspect(pk.action)}"
       a = cell[:aggregate] -> aggregate_label(a)
       act = cell[:run] -> "run #{inspect(act)}"
-      cell[:compute] -> "compute #{short(cell[:compute])}"
+      # the module IS the operator: `compute MeetingJoin` says the same thing
+      # twice, and the name is what a reader recognises
+      cell[:compute] -> short(cell[:compute])
       cell[:leaf?] -> "leaf"
       true -> nil
     end
@@ -110,6 +112,20 @@ defmodule ReactiveDagDashboard.Algebra do
     end
   end
 
+  # A `compute` module is OPAQUE — the library hands it a cell and keys and has
+  # no idea what it does with them, so it cannot say what any input is FOR.
+  #
+  # Labelling them all `arg:` was worse than saying nothing: four inputs to a
+  # MeetingJoin rendered as four identical roles, which reads as information and
+  # is not. The module name IS the operator here, and the inputs are just its
+  # arguments in order:
+  #
+  #     MeetingJoin( meeting_shell, agenda_items, meeting_events )
+  #
+  # A declarative node keeps named roles, because there the library really does
+  # know: a join's left is the left.
+  defp roled?(cell), do: not is_nil(cell[:compute])
+
   # `label/1` returns "reduce by :category"; the application splits it so the
   # qualifier trails the arguments — `reduce( folded: x ) by :category` reads as
   # the fold it is, where `reduce by :category( folded: x )` does not.
@@ -123,11 +139,20 @@ defmodule ReactiveDagDashboard.Algebra do
   end
 
   defp args(cell) do
-    roles = roles(cell)
+    if roled?(cell) do
+      cell |> inputs() |> Enum.join(", ")
+    else
+      roles = roles(cell)
 
-    cell
-    |> inputs()
-    |> Enum.map_join(" · ", fn input -> "#{Map.get(roles, input, "arg")}: #{input}" end)
+      cell
+      |> inputs()
+      |> Enum.map_join(" · ", fn input ->
+        case Map.get(roles, input) do
+          nil -> input
+          role -> "#{role}: #{input}"
+        end
+      end)
+    end
   end
 
   defp inputs(%{inputs: inputs}), do: inputs

@@ -110,22 +110,46 @@ defmodule ReactiveDagDashboard.Layouts do
         <script :if={js_path()} defer phx-track-static type="text/javascript" src={js_path()}>
         </script>
         <style>
-          /* The SVG graph. Colours come from daisyUI's theme tokens so the
-             diagram follows the host's palette rather than fighting it — the
-             one thing that cannot be expressed in utility classes, because SVG
-             presentation attributes are not Tailwind's. */
-          .rdd-edge { stroke: currentColor; stroke-width: 1.2; opacity: .28 }
-          .rdd-edge-hot { opacity: .9; stroke-width: 2 }
-          .rdd-gbox { fill: hsl(var(--b1)); stroke: currentColor; stroke-opacity: .25; cursor: pointer }
-          .rdd-gbox:hover { stroke-opacity: .7 }
-          .rdd-gbox-on { stroke-opacity: .9; stroke-width: 2 }
-          /* a node several routes reach, drawn as a set rather than a number */
-          .rdd-gstack { fill: none; stroke: currentColor; stroke-opacity: .18 }
-          .rdd-gtext { font-size: 12px; font-weight: 500; fill: currentColor }
-          .rdd-gsub { font-size: 10px; fill: currentColor; opacity: .5;
+          /* The SVG graph.
+
+             `currentColor` throughout, and NO daisyUI colour tokens: v5 moved
+             them to OKLCH values that already include the colour function, so
+             the v4 `hsl(var(--b1))` spelling silently produces an invalid fill
+             and SVG falls back to BLACK — which is what the first version of
+             this drew, solid black boxes swallowing their own labels.
+             `currentColor` inherits whatever the theme set on the container and
+             cannot be wrong. */
+          .rdd-graph { color: inherit }
+
+          /* a VALUE — rows that exist. Rounded, outlined, transparent. */
+          .rdd-gbox { fill: none; stroke: currentColor; stroke-opacity: .3; cursor: pointer }
+          .rdd-gbox:hover { stroke-opacity: .75 }
+          .rdd-gbox-on { stroke-opacity: 1; stroke-width: 2 }
+
+          /* an OPERATION — a rotated square. One shape for every operator: the
+             flavour is the label beside it, not the geometry. */
+          .rdd-gop { fill: none; stroke: currentColor; stroke-opacity: .45; cursor: pointer }
+          .rdd-gop:hover { stroke-opacity: .9 }
+          .rdd-gop-on { stroke-opacity: 1; stroke-width: 2 }
+
+          /* a set, not a single row — the stacked-card glyph */
+          .rdd-gstack { fill: none; stroke: currentColor; stroke-opacity: .15 }
+
+          .rdd-edge { stroke: currentColor; stroke-width: 1.2; opacity: .3; fill: none }
+          .rdd-edge-hot { opacity: .95; stroke-width: 2 }
+
+          .rdd-gtext { font-size: 11.5px; font-weight: 500; fill: currentColor }
+          .rdd-gsub { font-size: 9.5px; fill: currentColor; opacity: .55;
                       font-variant-numeric: tabular-nums }
-          /* many routes in: the tree's stacked-card glyph, as a shadow */
-          .rdd-many { box-shadow: 3px 3px 0 -1px hsl(var(--b3)), 5px 5px 0 -2px hsl(var(--b3)) }
+          .rdd-goplabel { font-size: 9.5px; fill: currentColor; opacity: .7;
+                          font-family: ui-monospace, monospace }
+          .rdd-gband { font-size: 9px; fill: currentColor; opacity: .35;
+                       letter-spacing: .08em; text-transform: uppercase }
+          .rdd-gbandline { stroke: currentColor; opacity: .1; stroke-width: 1 }
+
+          /* many routes in: the same stacked glyph the tree uses */
+          .rdd-many { box-shadow: 3px 3px 0 -1px currentColor, 5px 5px 0 -2px currentColor;
+                      opacity: .999 }
           .rotate-90 { transform: rotate(90deg) }
         </style>
       </head>

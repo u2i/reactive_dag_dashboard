@@ -214,6 +214,9 @@ defmodule ReactiveDagDashboard.Tree do
       via: node.via,
       last?: last?,
       cyclic?: node.cyclic?,
+      # already drawn in full elsewhere on this page — the subtree is suppressed
+      # here, not the row
+      repeat?: node.repeat? and not node.cyclic?,
       arrivals: Map.get(arrivals, node.id, []),
       routes: length(Map.get(arrivals, node.id, [])),
       # how many nodes read this one. Rendered as a pill so a COLLAPSED row

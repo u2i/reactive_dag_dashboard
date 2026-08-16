@@ -200,8 +200,33 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       {:ok, _view, html} = at("#{@path}?view=graph")
 
       # depth 0 at the left pad, depth 1 one column over
-      assert html =~ ~s|x="20"|
-      assert html =~ ~s|x="270"|
+      assert html =~ ~s|x="16"|
+      assert html =~ ~s|x="262"|
+    end
+
+    test "an operation is a DIAMOND between the boxes, not an implied arrow" do
+      # four inputs meeting at a MeetingJoin is a join; drawing it as four
+      # arrows into a box says only that they arrive
+      {:ok, _view, html} = at("#{@path}?view=graph")
+
+      assert html =~ "rdd-gop"
+      assert html =~ "rotate(45"
+    end
+
+    test "and it is labelled with the operator" do
+      {:ok, _view, html} = at("#{@path}?view=graph")
+
+      assert html =~ "rdd-goplabel"
+      assert Regex.match?(~r/rdd-goplabel">\s*union/, html)
+    end
+
+    test "a leaf has no diamond — nothing derives it" do
+      {:ok, _view, html} = at("#{@path}?view=graph")
+
+      diamonds = Regex.scan(~r/rdd-gop\b/, html) |> length()
+      boxes = Regex.scan(~r/rdd-gbox\b/, html) |> length()
+
+      assert diamonds < boxes, "sources are boxes with nothing feeding them"
     end
 
     test "a converging node is drawn as a stacked card" do

@@ -29,6 +29,8 @@ defmodule ReactiveDagDashboard.DagLive do
   """
   use Phoenix.LiveView
 
+  alias Phoenix.LiveView.JS
+
   import ReactiveDagDashboard.Components
 
   alias ReactiveDag.Insights
@@ -300,6 +302,28 @@ defmodule ReactiveDagDashboard.DagLive do
         />
       </div>
 
+      <div :if={@view == :tree} class="flex items-center gap-2 mb-2">
+        <button
+          type="button"
+          class="btn btn-ghost btn-xs"
+          phx-click={
+            JS.remove_class("hidden", to: ".rdd-kids") |> JS.add_class("rotate-90", to: ".rdd-chev")
+          }
+        >
+          expand all
+        </button>
+        <button
+          type="button"
+          class="btn btn-ghost btn-xs"
+          phx-click={
+            JS.add_class("hidden", to: ".rdd-kids") |> JS.remove_class("rotate-90", to: ".rdd-chev")
+          }
+        >
+          collapse
+        </button>
+        <span class="text-xs opacity-40">every source</span>
+      </div>
+
       <div :if={@view == :tree}>
         <section :for={panel <- panels(assigns)} class="mb-6">
           <div class="flex items-baseline gap-2 mb-1">
@@ -307,7 +331,9 @@ defmodule ReactiveDagDashboard.DagLive do
               <%= panel.title %>
             </h2>
 
-            <code :if={panel.every} class="text-xs opacity-40"><%= panel.every %></code>
+            <code :if={panel.every} class="text-xs opacity-40 font-normal normal-case">
+              · every <%= panel.every %>
+            </code>
 
             <button
               :if={panel.scannable?}

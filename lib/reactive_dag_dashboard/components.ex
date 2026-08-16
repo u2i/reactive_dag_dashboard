@@ -100,27 +100,6 @@ defmodule ReactiveDagDashboard.Components do
   """
   def hierarchy(assigns) do
     ~H"""
-    <div class="flex items-center gap-2 mb-1">
-      <button
-        type="button"
-        class="btn btn-ghost btn-xs"
-        phx-click={
-          JS.remove_class("hidden", to: ".rdd-kids") |> JS.add_class("rotate-90", to: ".rdd-chev")
-        }
-      >
-        expand all
-      </button>
-      <button
-        type="button"
-        class="btn btn-ghost btn-xs"
-        phx-click={
-          JS.add_class("hidden", to: ".rdd-kids") |> JS.remove_class("rotate-90", to: ".rdd-chev")
-        }
-      >
-        collapse
-      </button>
-    </div>
-
     <ul class="menu menu-sm w-full p-0 gap-0">
       <li :for={row <- @rows} id={"row-#{row.path}"} class={["rdd-kids", row.depth > 1 && "hidden"]}>
         <div
@@ -148,10 +127,23 @@ defmodule ReactiveDagDashboard.Components do
             <%= row.children %>
           </span>
 
-          <code :if={application(row)} class="text-xs opacity-70"><%= application(row) %></code>
+          <code :if={application(row)} class="text-xs opacity-70 min-w-0 break-all">
+            <%= application(row) %>
+          </code>
 
-          <span :if={row.routes > 1} class="badge badge-outline badge-xs">
+          <span
+            :if={row.routes > 1 and not row.repeat?}
+            class="badge badge-outline badge-xs shrink-0"
+          >
             <%= row.routes %> routes
+          </span>
+
+          <span
+            :if={row.repeat?}
+            class="badge badge-ghost badge-xs shrink-0 italic"
+            title="expanded under its other input"
+          >
+            also here
           </span>
 
           <span
@@ -161,7 +153,10 @@ defmodule ReactiveDagDashboard.Components do
             <%= status %> <%= n %>
           </span>
 
-          <span class="text-xs opacity-50 tabular-nums ml-auto" title={count_title(@status[row.id])}>
+          <span
+            class="text-xs opacity-50 tabular-nums ml-auto pl-3 shrink-0"
+            title={count_title(@status[row.id])}
+          >
             <%= key_count(@status[row.id]) %>
           </span>
         </div>
@@ -317,123 +312,183 @@ defmodule ReactiveDagDashboard.Components do
   attr(:plan, :map, required: true)
 
   @doc """
-  The graph as a drawn diagram: nodes in columns by depth, edges as real lines.
+  The graph as a drawn diagram: values as boxes, OPERATIONS as diamonds between
+  them.
 
-  The tree answers *"what does a change here reach"* and has to repeat a cell
-  once per route to do it. This answers *"what is the shape of the whole
-  thing"*, which a tree cannot: two routes converging on one node are two lines
-  meeting, drawn once.
+  The tree answers *"what does a change here reach"* and repeats a cell once per
+  route to do it. This answers *"what is the shape of the whole thing"* — two
+  routes converging are two lines meeting, drawn once.
 
-  Layout is the graph's own depth — `Insights.levels/1` is already
-  longest-path-from-a-leaf, which is exactly the column assignment a layered DAG
-  wants, so there is no layout algorithm here at all. Nodes stack within their
-  column; edges are horizontal-tangent cubic Béziers, which read as flow without
-  needing arrowheads at this size.
+  ## Why a diamond between the boxes
 
-  Hovering a node dims everything except it and its edges. That is the whole
-  interaction: a full ancestor/descendant trace would be better and needs a
-  reachability walk per node, which is worth doing once this earns its place.
+  A box-per-cell diagram draws `agenda_docs → agenda_items` and leaves the
+  operation implicit in the arrow. But the operation is the interesting part:
+  four inputs meeting at a `MeetingJoin` is a join, and drawing it as four
+  arrows into a box says only that they arrive.
+
+  So a derived cell renders as its inputs → a diamond → its box. The diamond
+  carries the operator name; every operation is the same shape, because the
+  flavour is a label and inventing a shape per operator would imply a taxonomy
+  the library does not have. That is the older compliance portal's call and its
+  reasoning holds: *one derive move*.
+
+  Columns come from the graph's own depth — `Insights.levels/1` is already
+  longest-path-from-a-leaf, which IS the layered assignment, so there is no
+  layout algorithm here.
   """
   def graph(assigns) do
-    assigns = assign(assigns, :geometry, geometry(assigns.levels))
+    assigns = assign(assigns, :g, geometry(assigns.levels, assigns.plan))
 
     ~H"""
-    <div class="overflow-x-auto border border-base-300 rounded-lg bg-base-200">
-      <svg
-        viewBox={"0 0 #{@geometry.width} #{@geometry.height}"}
-        width={@geometry.width}
-        height={@geometry.height}
-        class="rdd-graph"
-      >
+    <div class="overflow-x-auto border border-base-300 rounded-lg bg-base-200 p-2">
+      <svg viewBox={"0 0 #{@g.width} #{@g.height}"} width={@g.width} height={@g.height} class="rdd-graph">
         <path
-          :for={{from, to} <- @edges}
-          :if={@geometry.at[from] && @geometry.at[to]}
-          d={edge_path(@geometry.at[from], @geometry.at[to])}
-          class={[
-            "rdd-edge",
-            (from == @selected or to == @selected) && "rdd-edge-hot"
-          ]}
-          fill="none"
+          :for={seg <- @g.segments}
+          d={seg.d}
+          class={["rdd-edge", seg.hot? && "rdd-edge-hot"]}
         />
 
-        <g :for={{id, box} <- @geometry.at} class="rdd-gnode">
+        <g :for={op <- @g.ops}>
           <rect
-            :if={converging?(@edges, id)}
+            x={op.cx - op.r}
+            y={op.cy - op.r}
+            width={op.r * 2}
+            height={op.r * 2}
+            transform={"rotate(45 #{op.cx} #{op.cy})"}
+            class={["rdd-gop", op.id == @selected && "rdd-gop-on"]}
+            phx-click="select"
+            phx-value-cell={op.id}
+          />
+          <text x={op.cx} y={op.cy - op.r - 4} text-anchor="middle" class="rdd-goplabel">
+            <%= op.label %>
+          </text>
+        </g>
+
+        <g :for={box <- @g.boxes}>
+          <rect
+            :if={box.many?}
             x={box.x + 3}
             y={box.y + 3}
             width={box.w}
             height={box.h}
-            rx="4"
+            rx="5"
             class="rdd-gstack"
           />
-
           <rect
             x={box.x}
             y={box.y}
             width={box.w}
             height={box.h}
-            rx="4"
-            class={["rdd-gbox", id == @selected && "rdd-gbox-on"]}
+            rx="5"
+            class={["rdd-gbox", box.id == @selected && "rdd-gbox-on"]}
             phx-click="select"
-            phx-value-cell={id}
+            phx-value-cell={box.id}
           />
-
-          <text x={box.x + 8} y={box.y + 18} class="rdd-gtext"><%= id %></text>
-          <text x={box.x + 8} y={box.y + 31} class="rdd-gsub"><%= key_count(@status[id]) %></text>
+          <text x={box.x + 9} y={box.y + 19} class="rdd-gtext"><%= box.id %></text>
+          <text x={box.x + 9} y={box.y + 32} class="rdd-gsub"><%= box.sub %></text>
         </g>
       </svg>
     </div>
     """
   end
 
-  # Columns are the graph's depth; rows are position within the column. No
-  # layout algorithm — `Insights.levels/1` already grouped by longest path from
-  # a leaf, which IS the layered-DAG assignment.
-  @col_w 190
-  @col_gap 60
-  @row_h 44
-  @row_gap 16
-  @pad 20
+  @col_w 150
+  @col_gap 96
+  @row_h 42
+  @row_gap 22
+  @op_r 9
+  @pad 16
 
-  defp geometry(levels) do
-    at =
+  # Boxes on the depth columns; a diamond in the GAP before each derived cell,
+  # where its inputs converge. Edges then run input → diamond → box, so the
+  # operation sits on the path rather than being implied by it.
+  defp geometry(levels, plan) do
+    boxes =
       for {{_depth, cells}, col} <- Enum.with_index(levels),
           {cell, row} <- Enum.with_index(cells),
           into: %{} do
         {cell.id,
          %{
+           id: cell.id,
            x: @pad + col * (@col_w + @col_gap),
            y: @pad + row * (@row_h + @row_gap),
            w: @col_w,
-           h: @row_h
+           h: @row_h,
+           col: col
          }}
       end
 
-    tallest = levels |> Enum.map(fn {_d, cells} -> length(cells) end) |> Enum.max(fn -> 1 end)
+    ops = for {id, box} <- boxes, box.col > 0, op = op_for(plan, id, box), do: op
 
     %{
-      at: at,
+      boxes: Enum.map(boxes, fn {_id, b} -> decorate(b, plan) end),
+      ops: ops,
+      segments: segments(plan, boxes, ops),
       width: @pad * 2 + length(levels) * (@col_w + @col_gap),
-      height: @pad * 2 + tallest * (@row_h + @row_gap)
+      height: @pad * 2 + tallest(levels) * (@row_h + @row_gap)
     }
   end
 
-  # A horizontal-tangent cubic: it leaves the source rightward and arrives
-  # leftward, so the direction of flow reads without arrowheads.
-  defp edge_path(from, to) do
-    x1 = from.x + from.w
-    y1 = from.y + from.h / 2
-    x2 = to.x
-    y2 = to.y + to.h / 2
-    mx = (x1 + x2) / 2
+  defp tallest(levels),
+    do: levels |> Enum.map(fn {_d, c} -> length(c) end) |> Enum.max(fn -> 1 end)
 
-    "M#{x1},#{y1} C#{mx},#{y1} #{mx},#{y2} #{x2},#{y2}"
+  defp decorate(box, plan) do
+    Map.merge(box, %{
+      many?: length(Map.get(plan.parents, box.id, [])) > 1,
+      sub: op_name(plan.cells[box.id]) || ""
+    })
   end
 
-  # more than one edge INTO a node: drawn as a stacked card, the same glyph the
-  # tree uses for a cell reached by several routes
-  defp converging?(edges, id) do
-    edges |> Enum.count(fn {_from, to} -> to == id end) > 1
+  # The diamond sits midway between the deepest input's column and this one, so
+  # the edges into it are short and the fan-in is visible as a point.
+  defp op_for(plan, id, box) do
+    case plan.cells[id] do
+      nil ->
+        nil
+
+      cell ->
+        %{
+          id: id,
+          cx: box.x - @col_gap / 2,
+          cy: box.y + @row_h / 2,
+          r: @op_r,
+          label: op_name(cell) || "·"
+        }
+    end
+  end
+
+  defp op_name(nil), do: nil
+
+  defp op_name(cell) do
+    case ReactiveDagDashboard.Algebra.label(cell) do
+      nil -> nil
+      label -> label |> String.split(" ") |> hd()
+    end
+  end
+
+  # input box → its diamond, then diamond → the box it produces.
+  defp segments(plan, boxes, ops) do
+    by_id = Map.new(ops, &{&1.id, &1})
+
+    into_ops =
+      for {to, op} <- by_id,
+          from <- Map.get(plan.cells[to] || %{inputs: []}, :inputs, []),
+          b = boxes[from],
+          do: %{d: curve(b.x + b.w, b.y + @row_h / 2, op.cx - @op_r, op.cy), hot?: false}
+
+    out_of_ops =
+      for {to, op} <- by_id, b = boxes[to] do
+        %{d: curve(op.cx + @op_r, op.cy, b.x, b.y + @row_h / 2), hot?: false}
+      end
+
+    into_ops ++ out_of_ops
+  end
+
+  # horizontal-tangent cubic: leaves rightward, arrives leftward, so flow reads
+  # without arrowheads
+  defp curve(x1, y1, x2, y2) do
+    mx = (x1 + x2) / 2
+    "M#{x1},#{y1} C#{mx},#{y1} #{mx},#{y2} #{x2},#{y2}"
   end
 
   # ── helpers ─────────────────────────────────────────────────────────────────

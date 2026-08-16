@@ -38,6 +38,20 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
       assert html =~ "one crawl, 2 leaves"
     end
 
+    test "a leaf with no scanner says so, rather than being mis-attributed" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from")
+
+      assert html =~ "no scanner declared"
+      assert html =~ "unscanned"
+    end
+
+    test "upstream is a flat list — sinks have no crawl to group by" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/into")
+
+      refute html =~ "one crawl"
+      refute html =~ "no scanner declared"
+    end
+
     test "a single-leaf scanner is not labelled as a multi-leaf crawl" do
       {:ok, _view, html} = live(build_conn(), "#{@path}/from")
 

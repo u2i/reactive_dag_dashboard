@@ -318,14 +318,15 @@ defmodule ReactiveDagDashboard.TreeTest do
       assert grouped == Tree.roots(plan)
     end
 
-    test "an unscanned root is grouped under nil, not mis-attributed" do
+    test "an unscanned root is grouped under nil, not mis-attributed", %{plan: plan} do
       # its keys arrive some other way; that is not a crawl and must not be
-      # drawn as one
-      plan = ReactiveDag.Node.graph([FixtureGraph.Expenses])
+      # drawn as one. `expense_notes` is derived, so build a plan whose root
+      # declares no scanner at all.
       groups = Tree.roots_by_scanner(plan)
 
-      assert Enum.all?(groups, fn {_l, s, _ids} -> not is_nil(s) end) or
-               Enum.any?(groups, fn {_l, s, _ids} -> is_nil(s) end)
+      assert {nil, nil, ["unscanned"]} =
+               Enum.find(groups, fn {_l, s, _ids} -> is_nil(s) end),
+             "a root with no `scan` gets its own group, labelled by nothing"
     end
 
     test "unscanned roots sort last", %{plan: plan} do
@@ -340,13 +341,14 @@ defmodule ReactiveDagDashboard.TreeTest do
 
   describe "roots and sinks" do
     test "roots/1 finds the cells a change starts from", %{plan: plan} do
-      assert Tree.roots(plan) == ["expenses", "minutes", "resolutions"]
+      assert Tree.roots(plan) == ["expenses", "minutes", "resolutions", "unscanned"]
     end
 
     test "sinks/1 finds the cells nothing consumes", %{plan: plan} do
       # a scanned leaf nothing consumes is BOTH a root and a sink, which is not a
       # contradiction: it is where change enters and where it stops
-      assert Tree.sinks(plan) == ["all_verdicts", "expense_notes", "minutes", "resolutions"]
+      assert Tree.sinks(plan) ==
+               ["all_verdicts", "expense_notes", "minutes", "resolutions", "unscanned"]
     end
   end
 

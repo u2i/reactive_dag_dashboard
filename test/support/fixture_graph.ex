@@ -295,6 +295,29 @@ defmodule ReactiveDagDashboard.FixtureGraph do
     end
   end
 
+  # a leaf whose keys arrive some OTHER way — a manual import, a webhook. It has
+  # no scanner, and must not be grouped under one.
+  defmodule Unscanned do
+    use Ash.Resource, domain: Domain, data_layer: Ash.DataLayer.Ets, extensions: [ReactiveDag.Node]
+
+    ets do
+    end
+
+    attributes do
+      attribute :key, :string, primary_key?: true, allow_nil?: false, public?: true
+    end
+
+    actions do
+      defaults [:read, :destroy]
+      create :upsert, upsert?: true, accept: [:key]
+    end
+
+    reactive do
+      id(:unscanned)
+      leaf?(true)
+    end
+  end
+
   defmodule CouncilScan do
     @behaviour ReactiveDag.Source
 
@@ -321,7 +344,8 @@ defmodule ReactiveDagDashboard.FixtureGraph do
         AllVerdicts,
         ExpenseNotes,
         Minutes,
-        Resolutions
+        Resolutions,
+        Unscanned
       ])
 
   # recompute/2 returns {:ok, changed} or {:ok, changed, meta} depending on the
@@ -331,7 +355,7 @@ defmodule ReactiveDagDashboard.FixtureGraph do
 
   @doc "Seed every cell so the page has real rows to report."
   def seed do
-    for r <- [Expenses, CategoryHealth, SpendRollup, AllVerdicts, ExpenseNotes, Minutes, Resolutions],
+    for r <- [Expenses, CategoryHealth, SpendRollup, AllVerdicts, ExpenseNotes, Minutes, Resolutions, Unscanned],
         row <- Ash.read!(r),
         do: Ash.destroy!(row)
 
@@ -345,6 +369,8 @@ defmodule ReactiveDagDashboard.FixtureGraph do
       })
       |> Ash.create!()
     end
+
+    for k <- ["u1"], do: Unscanned |> Ash.Changeset.for_create(:upsert, %{key: k}) |> Ash.create!()
 
     for k <- ["m1"], do: Minutes |> Ash.Changeset.for_create(:upsert, %{key: k}) |> Ash.create!()
 

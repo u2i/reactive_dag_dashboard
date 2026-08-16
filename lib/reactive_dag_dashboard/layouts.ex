@@ -63,6 +63,40 @@ defmodule ReactiveDagDashboard.Layouts do
   """
   def js_path, do: Application.get_env(:reactive_dag_dashboard, :js_path)
 
+  @doc """
+  Which required asset paths are unset, as strings — `[]` when both are there.
+
+  A page that needs configuration to work should SAY so, rather than rendering
+  a dead interface and leaving a reader to diagnose it from the source. Both
+  failures look identical from a browser ("the dashboard is broken") and both
+  were reported as bugs against this library before anyone reached the config
+  (u2i/reactive_dag_dashboard#18, #21).
+
+  Nothing is guessed or defaulted: the dashboard cannot know where a host's
+  bundles live, and inventing `/assets/app.js` would 404 for anyone whose
+  layout differs. It can only be explicit about needing to be told.
+  """
+  @spec missing() :: [String.t()]
+  def missing do
+    [{"css_path", css_path()}, {"js_path", js_path()}]
+    |> Enum.reject(fn {_name, value} -> value end)
+    |> Enum.map(&elem(&1, 0))
+    |> case do
+      [] -> nil
+      names -> names
+    end
+  end
+
+  @doc "The config a host has to add, ready to paste."
+  @spec config_snippet() :: String.t()
+  def config_snippet do
+    """
+    config :reactive_dag_dashboard,
+      css_path: "/assets/app.css",
+      js_path: "/assets/app.js"\
+    """
+  end
+
   def root(assigns) do
     ~H"""
     <!DOCTYPE html>
@@ -77,6 +111,19 @@ defmodule ReactiveDagDashboard.Layouts do
         </script>
       </head>
       <body>
+        <div :if={missing()} class="alert alert-warning m-4" role="alert">
+          <div>
+            <p class="font-semibold">
+              reactive_dag_dashboard is missing <%= Enum.join(missing(), " and ") %>.
+            </p>
+            <p class="text-sm">
+              Without <code>js_path</code> the LiveSocket never connects, so nothing on this
+              page is clickable. Without <code>css_path</code> it renders unstyled.
+            </p>
+            <pre class="text-xs mt-2"><code><%= config_snippet() %></code></pre>
+          </div>
+        </div>
+
         <%= @inner_content %>
       </body>
     </html>

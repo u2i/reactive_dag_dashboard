@@ -134,6 +134,69 @@ defmodule ReactiveDagDashboard.LayoutTest do
     end
   end
 
+  describe "missing config announces itself" do
+    # A page that needs configuration to work should SAY so. Both failures look
+    # identical from a browser — "the dashboard is broken" — and both were filed
+    # as library bugs before anyone reached the config (#18, then #21). The
+    # second was diagnosed from source twice before the page was opened.
+    test "an unset js_path is named on the page" do
+      Application.put_env(:reactive_dag_dashboard, :css_path, "/assets/app.css")
+      Application.put_env(:reactive_dag_dashboard, :js_path, nil)
+
+      {:ok, _view, html} = live(build_conn(), @path)
+
+      assert html =~ "missing js_path"
+      assert html =~ "LiveSocket never connects", "says what breaks, not just what is unset"
+    end
+
+    test "an unset css_path likewise" do
+      Application.put_env(:reactive_dag_dashboard, :css_path, nil)
+      Application.put_env(:reactive_dag_dashboard, :js_path, "/assets/app.js")
+
+      {:ok, _view, html} = live(build_conn(), @path)
+
+      assert html =~ "missing css_path"
+    end
+
+    test "both unset names both" do
+      Application.put_env(:reactive_dag_dashboard, :css_path, nil)
+      Application.put_env(:reactive_dag_dashboard, :js_path, nil)
+
+      {:ok, _view, html} = live(build_conn(), @path)
+
+      assert html =~ "css_path and js_path"
+    end
+
+    test "and it carries the config to paste" do
+      Application.put_env(:reactive_dag_dashboard, :css_path, nil)
+      Application.put_env(:reactive_dag_dashboard, :js_path, nil)
+
+      {:ok, _view, html} = live(build_conn(), @path)
+
+      assert html =~ "config :reactive_dag_dashboard"
+      assert html =~ "js_path:"
+    end
+
+    test "with both configured, nothing is said" do
+      Application.put_env(:reactive_dag_dashboard, :css_path, "/assets/app.css")
+      Application.put_env(:reactive_dag_dashboard, :js_path, "/assets/app.js")
+
+      {:ok, _view, html} = live(build_conn(), @path)
+
+      refute html =~ "alert-warning"
+    end
+
+    test "a host with its own root_layout is not nagged" do
+      # they supply their own <head>; this layout is never used
+      Application.put_env(:reactive_dag_dashboard, :css_path, nil)
+      Application.put_env(:reactive_dag_dashboard, :js_path, nil)
+
+      {:ok, _view, html} = live(build_conn(), "/admin/dag")
+
+      refute html =~ "alert-warning"
+    end
+  end
+
   describe ":root_layout — the host's own chrome" do
     test "a host layout replaces the dashboard's entirely" do
       # the moduledoc has always said this is overridable; it was hardcoded, so

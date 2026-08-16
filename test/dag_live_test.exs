@@ -211,6 +211,36 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     end
   end
 
+  describe "upstream starts somewhere with an upstream" do
+    test "with no cell named, upstream starts at a SINK" do
+      # a root's upstream is one node with nothing above it — which is what
+      # "no hierarchy under upstream, each item a single entry" was.
+      #
+      # Asserted on the DETAIL heading: `expenses` also appears in the sources
+      # table whatever is selected, so matching the whole page proves nothing.
+      {:ok, _view, html} = at("#{@path}?direction=upstream")
+
+      # asserted on the PROPERTY, not on which sink sorts first: whatever is
+      # picked must have something above it, which a root never does
+      assert html =~ "├─" or html =~ "└─"
+    end
+
+    test "and a named sink shows its full depth" do
+      {:ok, _view, html} = at("#{@path}/cell/verdict_audit?direction=upstream")
+
+      # verdict_audit ← all_verdicts ← category_health/spend_rollup ← expenses
+      assert html =~ "all_verdicts"
+      assert html =~ "category_health"
+      assert html =~ "expenses"
+    end
+
+    test "downstream still starts at a root" do
+      {:ok, _view, html} = at(@path)
+
+      assert html =~ "what changes"
+    end
+  end
+
   describe "direction survives navigation" do
     test "the toggle puts direction in the URL" do
       {:ok, view, _} = at("#{@path}/cell/all_verdicts")

@@ -49,11 +49,13 @@ defmodule ReactiveDagDashboard.DagLive do
 
   @impl true
   def handle_params(params, uri, socket) do
+    dir = direction(params)
+
     {:noreply,
      socket
      |> assign(:base_path, base_path(uri, params["cell_id"]))
-     |> assign(:selected, params["cell_id"] || default_cell(socket.assigns))
-     |> assign(:direction, direction(params))
+     |> assign(:direction, dir)
+     |> assign(:selected, params["cell_id"] || default_cell(socket.assigns, dir))
      |> assign_view()}
   end
 
@@ -173,7 +175,12 @@ defmodule ReactiveDagDashboard.DagLive do
 
   # With nothing named, start where a change enters — the question people
   # arrive with is almost always "what happened to X", and X came from a source.
-  defp default_cell(%{plan: plan}), do: plan |> Tree.roots() |> List.first()
+  # Direction decides where to START. Upstream from a ROOT is one node with
+  # nothing above it — which is what "no hierarchy under upstream, each item a
+  # single entry" was: the default cell was always a root, so the upstream view
+  # could only ever show a leaf.
+  defp default_cell(%{plan: plan}, :upstream), do: plan |> Tree.sinks() |> List.first()
+  defp default_cell(%{plan: plan}, _downstream), do: plan |> Tree.roots() |> List.first()
 
   defp direction(%{"direction" => "upstream"}), do: :upstream
   defp direction(_), do: :downstream

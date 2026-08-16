@@ -159,47 +159,39 @@ defmodule ReactiveDagDashboard.Tree do
   def path_count(%{children: children}), do: children |> Enum.map(&path_count/1) |> Enum.sum()
 
   @doc """
-  The hierarchy from one root: parent-child structure kept, convergence marked.
+  The hierarchy from one root, expanded INLINE.
 
-  A DAG is not a tree, and the two shapes either side of this both lose something
-  to that fact. `flatten/1` repeats a converging cell once per route, so the same
-  name recurs with no indication of what it repeats from. `levels/2` collapses it
-  to one row and states its edges as text — which drops the edges as STRUCTURE,
-  leaving you to match a name in one band against a `via` string in the next.
+  A DAG is not a tree, and the two shapes either side of this both lose
+  something to that. `levels/2` collapses a converging cell to one row and
+  states its edges as text — which drops the edges as STRUCTURE, leaving you to
+  match a name in one band against a `via` string in the next.
 
-  This keeps the tree. Each cell's subtree is expanded exactly once, under the
-  route that reaches it FURTHEST from the root — so nothing is drawn above a cell
-  it depends on. Every other arrival becomes a leaf-level cross-reference: the
-  edge is still drawn, it just does not re-expand what is already on the page.
+  This keeps the tree and draws a converging cell under EVERY route that reaches
+  it, subtree and all. What sits under a parent is therefore everything that
+  parent causes — no cross-reference to chase, no subtree parked elsewhere on
+  the page:
 
-      agenda_docs
-      └─ agenda_items
-         ├─ meeting
-         │  └─ meetings          ← expanded here, the deepest route
-         └─ meeting_summaries
-            └─ meetings (above)  ← ref?: true, no subtree
+      agenda_items
+      ├─ meeting              [union]
+      │  └─ meetings          [reduce by :id]
+      │     └─ chains         [per_key]
+      └─ meeting_summaries    [per_key]
+         └─ meetings          [reduce by :id]
+            └─ chains         [per_key]
 
-  So a convergence renders as what it is: two edges arriving at one cell, both
-  visible, one of them expanded. `arrivals` on the expanded row names every
-  parent it is reached from, which is the fact `levels/2` had and the exploded
-  tree did not.
+  The cost is repetition, and it is the honest cost: those really are two
+  recomputes of `meetings`, and a shape drawing it once implies a single unit of
+  work. `arrivals` names every parent a cell is reached from and `routes` counts
+  them, so a convergence stays legible without reading the whole tree.
 
-  Rows come back depth-first with `depth`, `last?` (for drawing the rails) and
-  `ref?`, ready for a template to iterate once.
+  A cycle is still not descended into — that is a malformed graph rather than a
+  convergence, and expanding it would not terminate.
+
+  Rows come back depth-first with `depth` and `last?` (for drawing the rails),
+  ready for a template to iterate once.
   """
   @spec hierarchy(Plan.t(), node_t()) :: [map()]
   def hierarchy(%Plan{} = plan, tree) do
-    # where each cell expands: its greatest depth, so its subtree sits below
-    # everything it depends on. Ties break on the sorted parent, for stability.
-    home =
-      tree
-      |> flatten()
-      |> Enum.reject(& &1.cyclic?)
-      |> Enum.group_by(& &1.id)
-      |> Map.new(fn {id, occs} ->
-        {id, occs |> Enum.map(&{&1.depth, &1.via}) |> Enum.max()}
-      end)
-
     arrivals =
       tree
       |> flatten()
@@ -207,12 +199,10 @@ defmodule ReactiveDagDashboard.Tree do
       |> Enum.group_by(& &1.id, & &1.via)
       |> Map.new(fn {id, vias} -> {id, vias |> Enum.uniq() |> Enum.sort()} end)
 
-    walk_hierarchy(tree, home, arrivals, plan, 0, true, [])
+    walk_hierarchy(tree, arrivals, plan, 0, true, [])
   end
 
-  defp walk_hierarchy(node, home, arrivals, plan, depth, last?, acc) do
-    expands_here? = Map.get(home, node.id) == {node.depth, node.via}
-
+  defp walk_hierarchy(node, arrivals, plan, depth, last?, acc) do
     row = %{
       id: node.id,
       cell: node.cell,
@@ -220,19 +210,19 @@ defmodule ReactiveDagDashboard.Tree do
       via: node.via,
       last?: last?,
       cyclic?: node.cyclic?,
-      # a second arrival: the edge is drawn, the subtree is not repeated
-      ref?: not expands_here? and not node.cyclic?,
       arrivals: Map.get(arrivals, node.id, []),
       routes: length(Map.get(arrivals, node.id, []))
     }
 
-    children = if expands_here? and not node.cyclic?, do: node.children, else: []
+    # A cycle is still not descended into: that is a malformed graph rather than
+    # a convergence, and expanding it would not terminate.
+    children = if node.cyclic?, do: [], else: node.children
     last = length(children) - 1
 
     children
     |> Enum.with_index()
     |> Enum.reduce(acc ++ [row], fn {child, i}, acc ->
-      walk_hierarchy(child, home, arrivals, plan, depth + 1, i == last, acc)
+      walk_hierarchy(child, arrivals, plan, depth + 1, i == last, acc)
     end)
   end
 
@@ -278,7 +268,12 @@ defmodule ReactiveDagDashboard.Tree do
         # sits below everything on the long route, or it would render above a
         # cell it depends on
         distance: occurrences |> Enum.map(& &1.depth) |> Enum.max(),
-        via: occurrences |> Enum.map(& &1.via) |> Enum.reject(&is_nil/1) |> Enum.uniq() |> Enum.sort(),
+        via:
+          occurrences
+          |> Enum.map(& &1.via)
+          |> Enum.reject(&is_nil/1)
+          |> Enum.uniq()
+          |> Enum.sort(),
         routes: length(occurrences)
       }
     end)

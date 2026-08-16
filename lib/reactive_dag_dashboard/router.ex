@@ -31,6 +31,26 @@ defmodule ReactiveDagDashboard.Router do
     * `:live_session_name` — default `:reactive_dag_dashboard`.
     * `:on_mount` — extra `on_mount` hooks for the live session, so a host can
       assign its current user or enforce a role inside the LiveView too.
+    * `:root_layout` — a `{module, template}` tuple replacing the dashboard's own
+      chrome. Use it when mounting inside an existing admin shell that already
+      has a `<head>`, a nav bar and its stylesheet linked.
+
+  ## Styling
+
+  The page is built with daisyUI class names and ships no CSS, so the host's
+  stylesheet has to reach it. Two ways, matching the two shapes above:
+
+      # the dashboard's own chrome, told where the CSS lives
+      config :reactive_dag_dashboard, css_path: "/assets/app.css"
+
+      # or your chrome, which already links it
+      reactive_dag_dashboard "/dag", plan: {MyApp.Dag, :plan, []},
+        root_layout: {MyAppWeb.Layouts, :admin}
+
+  Tailwind also has to COMPILE those classes, which means telling it to look
+  inside this dependency:
+
+      @source "../deps/reactive_dag_dashboard";
   """
   defmacro reactive_dag_dashboard(path, opts \\ []) do
     quote bind_quoted: binding() do
@@ -39,9 +59,14 @@ defmodule ReactiveDagDashboard.Router do
       route_name = Keyword.get(opts, :as, :reactive_dag_dashboard)
       extra_on_mount = List.wrap(Keyword.get(opts, :on_mount, []))
 
+      # The moduledoc has always said this is overridable; it was hardcoded, so
+      # a host mounting inside its own chrome had no way to say so
+      # (u2i/reactive_dag_dashboard#18).
+      layout = Keyword.get(opts, :root_layout, {ReactiveDagDashboard.Layouts, :root})
+
       scope path, alias: false, as: false do
         live_session session_name,
-          root_layout: {ReactiveDagDashboard.Layouts, :root},
+          root_layout: layout,
           session: %{"plan_mfa" => plan_mfa},
           on_mount: extra_on_mount do
           # ONE view. It used to be three — an index by depth plus the two

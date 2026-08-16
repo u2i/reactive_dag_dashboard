@@ -160,27 +160,32 @@ defmodule ReactiveDagDashboard.DagLive do
     |> assign(:controls, controls)
     |> assign(:sources, NodeDetail.sources(plan, controls))
     |> assign(:status, Map.new(Insights.summary(plan), &{&1.id, &1}))
-    |> assign(:levels, Insights.levels(plan))
-    |> assign(:edges, Insights.edges(plan))
     |> assign(:pending, MapSet.new(Insights.pending(plan)))
   end
 
   defp assign_view(%{assigns: %{selected: nil}} = socket) do
-    socket |> assign(:rows, []) |> assign(:detail, nil) |> assign(:routes, 0)
+    socket
+    |> assign(:rows, [])
+    |> assign(:detail, nil)
+    |> assign(:routes, 0)
+    |> assign(:bands, [])
   end
 
   defp assign_view(%{assigns: %{plan: plan, selected: id, direction: dir}} = socket) do
-    tree =
-      case dir do
-        :upstream -> Tree.upstream(plan, id)
-        _ -> Tree.downstream(plan, id)
-      end
+    tree = tree_for(plan, id, dir)
 
     socket
     |> assign(:rows, Tree.hierarchy(plan, tree))
     |> assign(:routes, Tree.path_count(tree))
+    # The diagram's scope, from the same tree the expression uses. Whole-plan
+    # levels drew every cell at once, which at real graph sizes is a tangle no
+    # amount of styling rescues (u2i/reactive_dag_dashboard#28).
+    |> assign(:bands, Tree.levels(plan, tree))
     |> assign(:detail, NodeDetail.build(plan, id, socket.assigns.controls))
   end
+
+  defp tree_for(plan, id, :upstream), do: Tree.upstream(plan, id)
+  defp tree_for(plan, id, _downstream), do: Tree.downstream(plan, id)
 
   # Which trees the page shows, and what heads each one.
   #
@@ -292,36 +297,66 @@ defmodule ReactiveDagDashboard.DagLive do
         </button>
       </div>
 
+      <div class="flex items-center gap-2 mb-3">
+        <div class="join">
+          <button
+            class={["btn btn-xs join-item", @direction == :downstream && "btn-active"]}
+            phx-click="direction"
+            phx-value-to="downstream"
+            title="what a change to this reaches"
+          >
+            downstream
+          </button>
+          <button
+            class={["btn btn-xs join-item", @direction == :upstream && "btn-active"]}
+            phx-click="direction"
+            phx-value-to="upstream"
+            title="what feeds this"
+          >
+            upstream
+          </button>
+        </div>
+
+        <span :if={@view == :tree} class="ml-2 flex items-center gap-2">
+          <button
+            type="button"
+            class="btn btn-ghost btn-xs"
+            phx-click={
+              JS.remove_class("hidden", to: ".rdd-kids")
+              |> JS.add_class("rotate-90", to: ".rdd-chev")
+            }
+          >
+            expand all
+          </button>
+          <button
+            type="button"
+            class="btn btn-ghost btn-xs"
+            phx-click={
+              JS.add_class("hidden", to: ".rdd-kids")
+              |> JS.remove_class("rotate-90", to: ".rdd-chev")
+            }
+          >
+            collapse
+          </button>
+        </span>
+
+        <span class="text-xs opacity-40 ml-auto">
+          <%= @routes %> route<%= if @routes == 1, do: "", else: "s" %>
+        </span>
+      </div>
+
       <div :if={@view == :graph}>
         <.graph
-          levels={@levels}
-          edges={@edges}
+          levels={@bands}
           status={@status}
           selected={@selected}
           plan={@plan}
         />
-      </div>
-
-      <div :if={@view == :tree} class="flex items-center gap-2 mb-2">
-        <button
-          type="button"
-          class="btn btn-ghost btn-xs"
-          phx-click={
-            JS.remove_class("hidden", to: ".rdd-kids") |> JS.add_class("rotate-90", to: ".rdd-chev")
-          }
-        >
-          expand all
-        </button>
-        <button
-          type="button"
-          class="btn btn-ghost btn-xs"
-          phx-click={
-            JS.add_class("hidden", to: ".rdd-kids") |> JS.remove_class("rotate-90", to: ".rdd-chev")
-          }
-        >
-          collapse
-        </button>
-        <span class="text-xs opacity-40">every source</span>
+        <p class="text-xs opacity-40 mt-1">
+          <%= if @direction == :upstream, do: "what feeds", else: "what a change to" %>
+          <code><%= @selected %></code>
+          <%= if @direction == :upstream, do: "", else: "reaches" %> — convergence drawn once
+        </p>
       </div>
 
       <div :if={@view == :tree}>

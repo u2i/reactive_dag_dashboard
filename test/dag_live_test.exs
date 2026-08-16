@@ -214,10 +214,39 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     end
 
     test "and it is labelled with the operator" do
-      {:ok, _view, html} = at("#{@path}?view=graph")
+      # from `expenses`, because the diagram is SCOPED to the selected node and
+      # the default root's subtree has no union in it. That scoping is the
+      # point of the view: drawing the whole plan at once is what made this
+      # unreadable at real graph sizes.
+      {:ok, _view, html} = at("#{@path}/cell/expenses?view=graph")
 
       assert html =~ "rdd-goplabel"
       assert Regex.match?(~r/rdd-goplabel">\s*union/, html)
+    end
+
+    test "the diagram is SCOPED to the selected node, not the whole plan" do
+      # the defect this view shipped with: `council_portal` reaches three cells,
+      # and the diagram drew all twelve in the fixture — every node in the plan,
+      # on one canvas, whatever was selected.
+      {:ok, _view, html} = at("#{@path}/cell/council_portal?view=graph")
+
+      assert html =~ "council_portal"
+      assert html =~ "minutes"
+
+      refute html =~ "all_verdicts", "not reachable from council_portal"
+      refute html =~ "category_health", "belongs to the other source's subtree"
+    end
+
+    test "an edge is drawn only when BOTH ends are on the canvas" do
+      # a scoped view must not draw an edge to a node it does not contain: the
+      # segment count is bounded by the arrivals INSIDE the subgraph.
+      {:ok, _view, html} = at("#{@path}/cell/council_portal?view=graph")
+
+      edges = Regex.scan(~r/class="rdd-edge\s*"/, html) |> length()
+
+      # council_portal → minutes, → resolutions, each via its own diamond:
+      # two edges in, two out, and nothing leaving the subgraph
+      assert edges == 4
     end
 
     test "a leaf has no diamond — nothing derives it" do
@@ -264,7 +293,10 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     test "rows below depth 1 start hidden" do
       {:ok, _view, html} = at(@path)
 
-      assert html =~ ~s|class="rdd-kids hidden"|
+      # the toggle target and the hidden state on one node, rather than an
+      # exact class string — the class list gained `rdd-node` when rows became
+      # nested cards, and an equality assert would have failed on styling
+      assert Regex.match?(~r/class="[^"]*\brdd-kids\b[^"]*\bhidden\b/, html)
     end
 
     test "a collapsible row carries its child count" do
@@ -325,8 +357,9 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       {:ok, _view, html} = at("#{@path}?direction=upstream")
 
       # asserted on the PROPERTY, not on which sink sorts first: whatever is
-      # picked must have something above it, which a root never does
-      assert html =~ "margin-left: 1.25rem", "something is nested under something"
+      # picked must have something above it, which a root never does. One
+      # indent step is 26px — the nesting a card at depth 1 carries.
+      assert html =~ "margin-left: 26px", "something is nested under something"
     end
 
     test "and a named sink shows its full depth" do

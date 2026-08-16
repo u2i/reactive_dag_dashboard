@@ -91,6 +91,24 @@ defmodule ReactiveDagDashboard.Components do
   to the node reading it. A join's left and right are not interchangeable, a
   union's inputs are alternatives, and a bare arrow says neither.
 
+  ## Why nested cards rather than indented rows
+
+  This used to be flat `<li>`s pushed right by a `margin-left` computed from
+  depth. That renders the same information and reads worse, because indentation
+  alone is a weak signal: at four levels the eye cannot tell which ancestor a
+  row belongs to, and nothing bounds a subtree.
+
+  So a node is a bordered CARD, and its children nest INSIDE it — the older
+  compliance portal's model tree, whose reasoning holds here. Containment is
+  the structure, so no arithmetic encodes it: a subtree is visibly a region of
+  the page rather than a run of rows that happen to start further right. The
+  dashed rail down the children's edge is what makes a deep nest scannable, and
+  the 4px kind-coloured spine on each card says what KIND of thing it is
+  before you read the label.
+
+  A cell reached by more than one route carries the stacked-card shadow — one
+  glyph meaning "a set, not a single thing", the same one the SVG uses.
+
   Collapsed below depth 1 by default, with a child count on every collapsible
   row: a 7-deep graph is unreadable fully expanded, and a collapsed row with no
   count looks like a leaf.
@@ -100,19 +118,25 @@ defmodule ReactiveDagDashboard.Components do
   """
   def hierarchy(assigns) do
     ~H"""
-    <ul class="menu menu-sm w-full p-0 gap-0">
-      <li :for={row <- @rows} id={"row-#{row.path}"} class={["rdd-kids", row.depth > 1 && "hidden"]}>
+    <div class="rdd-tree">
+      <div
+        :for={row <- @rows}
+        id={"row-#{row.path}"}
+        class={["rdd-node rdd-kids", row.depth > 1 && "hidden"]}
+      >
         <div
           class={[
-            "flex items-baseline gap-2 py-1 px-2 rounded",
-            row.id == @selected && "bg-base-300",
-            row.routes > 1 && "rdd-many"
+            "rdd-row",
+            row.routes > 1 && "rdd-many",
+            row.id == @selected && "rdd-on"
           ]}
-          style={"margin-left: #{row.depth * 1.25}rem"}
+          style={"margin-left: #{row.depth * 26}px"}
         >
+          <span class={["rdd-lead", lead_class(row)]}></span>
+
           <span
             :if={row.children > 0}
-            class="rdd-chev font-mono text-xs opacity-40 cursor-pointer"
+            class="rdd-chev font-mono text-xs opacity-40 cursor-pointer select-none"
             phx-click={toggle_kids(row)}
           >
             ▸
@@ -160,9 +184,23 @@ defmodule ReactiveDagDashboard.Components do
             <%= key_count(@status[row.id]) %>
           </span>
         </div>
-      </li>
-    </ul>
+      </div>
+    </div>
     """
+  end
+
+  # The spine's colour says what KIND of node this is before the label is read:
+  # where data ENTERS the graph, where it is COMBINED, and where it is merely
+  # carried. Three kinds, because the library has three — inventing a colour per
+  # operator would imply a taxonomy that does not exist.
+  defp lead_class(%{cell: nil}), do: "rdd-lead-plain"
+
+  defp lead_class(%{cell: cell}) do
+    cond do
+      cell.inputs == [] -> "rdd-lead-source"
+      length(cell.inputs) > 1 -> "rdd-lead-join"
+      true -> "rdd-lead-derive"
+    end
   end
 
   # Collapse this row's whole subtree. Paths are prefixes — "r-0" contains
@@ -306,7 +344,6 @@ defmodule ReactiveDagDashboard.Components do
   end
 
   attr(:levels, :list, required: true)
-  attr(:edges, :list, required: true)
   attr(:status, :map, required: true)
   attr(:selected, :string, default: nil)
   attr(:plan, :map, required: true)
@@ -316,8 +353,22 @@ defmodule ReactiveDagDashboard.Components do
   them.
 
   The tree answers *"what does a change here reach"* and repeats a cell once per
-  route to do it. This answers *"what is the shape of the whole thing"* — two
-  routes converging are two lines meeting, drawn once.
+  route to do it. This answers *"what is the shape of this"* — two routes
+  converging are two lines meeting, drawn once. Same expression, two readings,
+  and neither is a better version of the other.
+
+  ## Why it is scoped to the selected node
+
+  The first version drew the WHOLE plan: every cell in the graph, every edge,
+  on one canvas. At seven nodes that is a diagram; at twenty-seven it is a
+  black tangle where labels overlap their neighbours and no path is traceable,
+  which is what shipped and what made this tab look like a mistake.
+
+  The tree never had that problem, because it is scoped — one panel per source,
+  and the panel only contains what that source reaches. This takes the same
+  scope from the same place: `Tree.levels/2` over the selected node's reachable
+  set. So the two tabs show the same subgraph, from either end, and the diagram
+  stays the size a diagram can be.
 
   ## Why a diamond between the boxes
 
@@ -332,9 +383,9 @@ defmodule ReactiveDagDashboard.Components do
   the library does not have. That is the older compliance portal's call and its
   reasoning holds: *one derive move*.
 
-  Columns come from the graph's own depth — `Insights.levels/1` is already
-  longest-path-from-a-leaf, which IS the layered assignment, so there is no
-  layout algorithm here.
+  Columns are the band a cell falls in — its distance from the origin, which is
+  its greatest distance, so a cell never renders left of something it depends
+  on. That IS the layered assignment; there is no layout algorithm here.
   """
   def graph(assigns) do
     assigns = assign(assigns, :g, geometry(assigns.levels, assigns.plan))
@@ -399,22 +450,32 @@ defmodule ReactiveDagDashboard.Components do
   @op_r 9
   @pad 16
 
-  # Boxes on the depth columns; a diamond in the GAP before each derived cell,
+  # Boxes on the distance bands; a diamond in the GAP before each derived cell,
   # where its inputs converge. Edges then run input → diamond → box, so the
   # operation sits on the path rather than being implied by it.
+  #
+  # Each column is centred vertically against the tallest, so a band of one node
+  # sits beside the middle of a band of six rather than at its top — which is
+  # what made the edges cross far more than the graph actually does.
   defp geometry(levels, plan) do
+    tall = tallest(levels)
+
     boxes =
-      for {{_depth, cells}, col} <- Enum.with_index(levels),
+      for {{_distance, cells}, col} <- Enum.with_index(levels),
           {cell, row} <- Enum.with_index(cells),
           into: %{} do
+        offset = (tall - length(cells)) * (@row_h + @row_gap) / 2
+
         {cell.id,
          %{
            id: cell.id,
            x: @pad + col * (@col_w + @col_gap),
-           y: @pad + row * (@row_h + @row_gap),
+           y: @pad + offset + row * (@row_h + @row_gap),
            w: @col_w,
            h: @row_h,
-           col: col
+           col: col,
+           routes: Map.get(cell, :routes, 1),
+           via: Map.get(cell, :via, [])
          }}
       end
 
@@ -425,16 +486,19 @@ defmodule ReactiveDagDashboard.Components do
       ops: ops,
       segments: segments(plan, boxes, ops),
       width: @pad * 2 + length(levels) * (@col_w + @col_gap),
-      height: @pad * 2 + tallest(levels) * (@row_h + @row_gap)
+      height: @pad * 2 + tall * (@row_h + @row_gap)
     }
   end
 
   defp tallest(levels),
     do: levels |> Enum.map(fn {_d, c} -> length(c) end) |> Enum.max(fn -> 1 end)
 
+  # `routes` comes from the scoped tree — how many paths reach this cell WITHIN
+  # this subgraph — rather than the plan's global parent count, which would mark
+  # a node "many" for arrivals the picture does not contain.
   defp decorate(box, plan) do
     Map.merge(box, %{
-      many?: length(Map.get(plan.parents, box.id, [])) > 1,
+      many?: box.routes > 1,
       sub: op_name(plan.cells[box.id]) || ""
     })
   end
@@ -467,12 +531,17 @@ defmodule ReactiveDagDashboard.Components do
   end
 
   # input box → its diamond, then diamond → the box it produces.
-  defp segments(plan, boxes, ops) do
+  #
+  # `b = boxes[from]` is a filter as much as a binding: an input OUTSIDE this
+  # subgraph has no box, the comprehension drops it, and no edge is drawn to a
+  # node that is not on the canvas. That is the honest rendering of a scoped
+  # view — the diamond's fan-in shows the inputs this picture contains.
+  defp segments(_plan, boxes, ops) do
     by_id = Map.new(ops, &{&1.id, &1})
 
     into_ops =
       for {to, op} <- by_id,
-          from <- Map.get(plan.cells[to] || %{inputs: []}, :inputs, []),
+          from <- inputs_within(boxes, to),
           b = boxes[from],
           do: %{d: curve(b.x + b.w, b.y + @row_h / 2, op.cx - @op_r, op.cy), hot?: false}
 
@@ -482,6 +551,21 @@ defmodule ReactiveDagDashboard.Components do
       end
 
     into_ops ++ out_of_ops
+  end
+
+  # The cells this one is REACHED FROM inside this subgraph — `via` from the
+  # scoped tree, which is direction-agnostic by construction: downstream it is
+  # the parent a change arrived through, upstream it is the input. Either way it
+  # is the neighbour one band to the left, which is where the edge belongs.
+  #
+  # Deriving this from `plan.cells[to].inputs` instead would be wrong in both
+  # directions at once: it names inputs that are not on the canvas, and in the
+  # upstream view those inputs sit to the RIGHT, so the edge doubles back.
+  defp inputs_within(boxes, to) do
+    case boxes[to] do
+      nil -> []
+      %{via: via} -> Enum.filter(via, &Map.has_key?(boxes, &1))
+    end
   end
 
   # horizontal-tangent cubic: leaves rightward, arrives leftward, so flow reads

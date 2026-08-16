@@ -90,13 +90,13 @@ defmodule ReactiveDagDashboard.PageLive do
           {"scan of #{cell_id} queued — results will appear as it drains", false}
 
         {:ran, %{unreachable: []} = result} ->
-          {"scanned #{cell_id}: #{summarise(result)}", true}
+          {"scanned #{cell_id}: #{summarise(result)}#{across_leaves(result)}", true}
 
         # An outage is not a quiet success. A scan that could not look must not
         # render as a scan that found nothing — the honest gap, on screen.
         {:ran, %{unreachable: up} = result} ->
-          {"scanned #{cell_id}: #{summarise(result)}, #{length(up)} upstream(s) " <>
-             "unreachable — results are incomplete", true}
+          {"scanned #{cell_id}: #{summarise(result)}#{across_leaves(result)}, " <>
+             "#{length(up)} upstream(s) unreachable — results are incomplete", true}
 
         :no_scanner ->
           {"#{cell_id} has no scanner", false}
@@ -205,6 +205,24 @@ defmodule ReactiveDagDashboard.PageLive do
   end
 
   defp summarise(%{changed: changed}), do: "#{length(changed)} key(s) changed"
+
+  # A source can feed several leaves: one crawl of one upstream whose rows land
+  # in two cells, marked by a single `refresh/3`. Reporting only the cell whose
+  # button was pressed would hide half the work — and the hidden half is exactly
+  # where someone looks when a downstream number surprises them.
+  #
+  # Named only when there IS more than one, so the ordinary single-leaf scan does
+  # not grow a breakdown it has no use for.
+  defp across_leaves(%{marked: marked}) when map_size(marked) > 1 do
+    detail =
+      marked
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.map_join(", ", fn {leaf, keys} -> "#{leaf} #{length(keys)}" end)
+
+    " across #{map_size(marked)} leaves — #{detail}"
+  end
+
+  defp across_leaves(_), do: ""
 
   defp put_where(args, %{"column" => c, "value" => v}), do: Map.put(args, "where", %{c => v})
   defp put_where(args, _params), do: args

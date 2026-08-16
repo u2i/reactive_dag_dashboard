@@ -39,6 +39,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
 
     on_exit(fn ->
       Observer.detach()
+
       if prev,
         do: Application.put_env(:reactive_dag, :repo, prev),
         else: Application.delete_env(:reactive_dag, :repo)
@@ -125,7 +126,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     test "says it is live when subscribed, and polling when not" do
       Observer.attach(@pubsub)
       {:ok, _view, html} = live(build_conn(), @path)
-      assert html =~ "rdd-live-true"
+      assert html =~ "live"
       assert html =~ ">\n          live\n        </span>" or html =~ "live"
     end
 
@@ -136,13 +137,15 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
 
       {:ok, _view, html} = live(build_conn(), @path)
 
-      assert html =~ "rdd-live-false"
+      assert html =~ "polling"
       assert html =~ "polling"
     end
 
     test "a real drain updates the page without a poll tick" do
       Observer.attach(@pubsub)
-      {:ok, view, html} = live(build_conn(), @path)
+      # the graph has several roots, so name the one this test is about rather
+      # than relying on which sorts first
+      {:ok, view, html} = live(build_conn(), "#{@path}/cell/expenses")
 
       # travel is 500.0 → failing
       assert html =~ "failing"
@@ -164,7 +167,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       # a direct handler per LiveView.
       Observer.attach(@pubsub)
       {:ok, a, _} = live(build_conn(), @path)
-      {:ok, b, _} = live(build_conn(), "#{@path}/from/expenses")
+      {:ok, b, _} = live(build_conn(), "#{@path}/cell/expenses")
 
       Frontier.mark_dirty("expenses", ["*"], "seed")
       {:ok, _} = drain()
@@ -227,8 +230,12 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
   # the flush is deliberately debounced, so a render assertion has to wait for it
   defp render_eventually(view, needle, attempts \\ 20) do
     cond do
-      render(view) =~ needle -> true
-      attempts == 0 -> flunk("never rendered #{inspect(needle)}")
+      render(view) =~ needle ->
+        true
+
+      attempts == 0 ->
+        flunk("never rendered #{inspect(needle)}")
+
       true ->
         Process.sleep(25)
         render_eventually(view, needle, attempts - 1)

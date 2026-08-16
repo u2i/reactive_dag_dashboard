@@ -293,12 +293,17 @@ defmodule ReactiveDagDashboard.TreeTest do
   end
 
   describe "roots_by_scanner/1 — which leaves are one crawl" do
-    test "two leaves fed by one scanner group together", %{plan: plan} do
+    test "a source is ONE root, and its fan-out is graph structure", %{plan: plan} do
+      # this used to assert that two leaves grouped under one scanner. The
+      # source is now a node, so there is one root and the two cells it feeds
+      # are its children — visible in the hierarchy rather than synthesised here
       groups = Tree.roots_by_scanner(plan)
 
       assert Enum.any?(groups, fn {_label, scanner, ids} ->
-               scanner == FixtureGraph.CouncilScan and ids == ["minutes", "resolutions"]
+               scanner == FixtureGraph.CouncilScan and ids == ["council_portal"]
              end)
+
+      assert Enum.sort(plan.parents["council_portal"]) == ["minutes", "resolutions"]
     end
 
     test "the group is labelled by the scanner's own origin", %{plan: plan} do
@@ -346,7 +351,9 @@ defmodule ReactiveDagDashboard.TreeTest do
 
   describe "roots and sinks" do
     test "roots/1 finds the cells a change starts from", %{plan: plan} do
-      assert Tree.roots(plan) == ["expenses", "minutes", "resolutions", "unscanned"]
+      # `minutes` and `resolutions` are no longer roots: they derive from
+      # `council_portal`, the source node that holds the crawl
+      assert Tree.roots(plan) == ["council_portal", "expenses", "unscanned"]
     end
 
     test "sinks/1 finds the cells nothing consumes", %{plan: plan} do

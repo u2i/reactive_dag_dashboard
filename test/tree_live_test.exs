@@ -29,13 +29,15 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
       assert html =~ "expenses"
     end
 
-    test "leaves are grouped by the crawl that feeds them" do
-      # listed side by side, two halves of one crawl read as two independent
-      # sources — which is exactly how it looked before this
+    test "a source root is labelled by its origin, not its cell id" do
+      # this used to assert "one crawl, 2 leaves" — a synthesised grouping of
+      # two leaves sharing a scanner. The source is a node now, so there is one
+      # root; what survives is the LABEL, because only the module knows its own
+      # name for itself.
       {:ok, _view, html} = live(build_conn(), "#{@path}/from")
 
       assert html =~ "Council portal", "the scanner's own origin label"
-      assert html =~ "one crawl, 2 leaves"
+      refute html =~ "one crawl"
     end
 
     test "a leaf with no scanner says so, rather than being mis-attributed" do

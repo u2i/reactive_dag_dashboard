@@ -172,31 +172,33 @@ defmodule ReactiveDagDashboard.ScanControlTest do
     end
   end
 
-  describe "a scanner feeding several leaves" do
-    # One crawl of one upstream whose rows land in two cells. `refresh/3` marks
-    # both from a single poll, so a message naming only the button's cell hides
-    # half of what the scan just did — and the other half is where a reader
-    # would go looking when a number surprises them.
-    test "the message names every leaf the poll marked" do
-      {view, _} = drawer("minutes")
+  describe "a source feeding several consumers" do
+    # One crawl whose rows land in two downstream cells. That used to be a
+    # MARKING concern — `refresh/3` marked both leaves from one poll, and the
+    # message had to name each or hide half the work.
+    #
+    # A source is a node now, so the poll marks ONE cell and the drain carries
+    # it to the consumers. The scan message is about the cell that was scanned;
+    # what the change reached is the drain's business, and the hierarchy shows
+    # it.
+    test "the message is about the cell that was scanned" do
+      {view, _} = drawer("council_portal")
 
-      html = render_click(view, "scan", %{"cell" => "minutes", "mode" => "default"})
+      html = render_click(view, "scan", %{"cell" => "council_portal", "mode" => "default"})
 
-      # both cells appear all over the page — in the graph, in the tree — so
-      # `html =~ "resolutions"` proves nothing. Assert on the MESSAGE.
-      assert html =~ "across 2 leaves"
-      assert scan_message(html) =~ "resolutions", "the second leaf this one poll also marked"
+      assert scan_message(html) =~ "scanned council_portal"
+      refute scan_message(html) =~ "across"
     end
 
-    test "and says how many keys each got" do
-      {view, _} = drawer("minutes")
+    test "and its consumers are reached by the drain, not by the marking" do
+      {view, _} = drawer("council_portal")
 
-      html = render_click(view, "scan", %{"cell" => "minutes", "mode" => "default"})
+      render_click(view, "scan", %{"cell" => "council_portal", "mode" => "default"})
 
-      # 1 for minutes, 2 for resolutions — a single total would read as 3 keys
-      # in the cell you were looking at
-      assert html =~ "minutes 1"
-      assert html =~ "resolutions 2"
+      # `minutes` and `resolutions` are children of the scanned cell — no
+      # scan-specific machinery involved
+      plan = FixtureGraph.plan()
+      assert Enum.sort(plan.parents["council_portal"]) == ["minutes", "resolutions"]
     end
 
     test "a single-leaf scan still reads as one cell" do

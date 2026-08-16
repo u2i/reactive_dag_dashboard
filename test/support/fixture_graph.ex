@@ -47,7 +47,7 @@ defmodule ReactiveDagDashboard.FixtureGraph do
       leaf?(true)
       slice(:fiscal_year, values: ["FY24", "FY25"])
 
-      scan(ReactiveDagDashboard.FixtureGraph.ExpenseScan,
+      poll(ReactiveDagDashboard.FixtureGraph.ExpenseScan,
         args: [recent: true],
         every: "0 * * * *"
       )
@@ -305,8 +305,6 @@ defmodule ReactiveDagDashboard.FixtureGraph do
     @impl true
     def id, do: :expense_scan
     @impl true
-    def leaf_cells(_g), do: ["expenses"]
-    @impl true
     def origin, do: %{label: "Finance export"}
     @impl true
     def poll(opts) do
@@ -355,8 +353,20 @@ defmodule ReactiveDagDashboard.FixtureGraph do
 
     reactive do
       id(:minutes)
-      leaf?(true)
-      scan(ReactiveDagDashboard.FixtureGraph.CouncilScan)
+
+      # a projection of the council crawl, not a scanner of its own. `{:skip,
+      # key}` declines a document of the other kind — returning nothing would
+      # retire it and churn on every poll.
+      reduce(
+        over: :council_portal,
+        group_by: :key,
+        expand: fn key, rows ->
+          case Enum.filter(rows, &(&1.kind == "minutes")) do
+            [] -> [{:skip, key}]
+            [_ | _] -> [%{key: key}]
+          end
+        end
+      )
     end
   end
 
@@ -380,8 +390,17 @@ defmodule ReactiveDagDashboard.FixtureGraph do
 
     reactive do
       id(:resolutions)
-      leaf?(true)
-      scan(ReactiveDagDashboard.FixtureGraph.CouncilScan)
+
+      reduce(
+        over: :council_portal,
+        group_by: :key,
+        expand: fn key, rows ->
+          case Enum.filter(rows, &(&1.kind == "resolution")) do
+            [] -> [{:skip, key}]
+            [_ | _] -> [%{key: key}]
+          end
+        end
+      )
     end
   end
 
@@ -411,19 +430,48 @@ defmodule ReactiveDagDashboard.FixtureGraph do
     end
   end
 
+  # ONE crawl of the council portal. Its rows land here; `minutes` and
+  # `resolutions` are ordinary consumers projecting their own kind out of it.
+  # Before the source became a node, both leaves declared `scan CouncilScan` and
+  # the module declared `leaf_cells/1` back.
+  defmodule CouncilPortal do
+    use Ash.Resource,
+      domain: Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [ReactiveDag.Node]
+
+    ets do
+    end
+
+    attributes do
+      attribute(:key, :string, primary_key?: true, allow_nil?: false, public?: true)
+      attribute(:kind, :string, public?: true)
+    end
+
+    actions do
+      defaults([:read, :destroy])
+      create(:upsert, upsert?: true, accept: [:key, :kind])
+    end
+
+    reactive do
+      id(:council_portal)
+      leaf?(true)
+      poll(ReactiveDagDashboard.FixtureGraph.CouncilScan)
+    end
+  end
+
   defmodule CouncilScan do
     @behaviour ReactiveDag.Source
 
     @impl true
     def id, do: :council_scan
     @impl true
-    def leaf_cells(_g), do: ["minutes", "resolutions"]
-    @impl true
     def origin, do: %{label: "Council portal"}
     @impl true
     def poll(_opts) do
-      # keyed BY LEAF: one poll, rows for two cells
-      {:ok, %{changed: %{"minutes" => ["m1"], "resolutions" => ["r1", "r2"]}}}
+      # one poll, one cell — what each document IS is a column on the row, and
+      # the consumers project on it
+      {:ok, %{changed: ["m1", "r1", "r2"]}}
     end
   end
 
@@ -436,6 +484,7 @@ defmodule ReactiveDagDashboard.FixtureGraph do
         SpendRollup,
         AllVerdicts,
         ExpenseNotes,
+        CouncilPortal,
         Minutes,
         Resolutions,
         Unscanned,
@@ -456,6 +505,7 @@ defmodule ReactiveDagDashboard.FixtureGraph do
           SpendRollup,
           AllVerdicts,
           ExpenseNotes,
+          CouncilPortal,
           Minutes,
           Resolutions,
           Unscanned,
@@ -478,14 +528,16 @@ defmodule ReactiveDagDashboard.FixtureGraph do
     for k <- ["u1"],
         do: Unscanned |> Ash.Changeset.for_create(:upsert, %{key: k}) |> Ash.create!()
 
-    for k <- ["m1"], do: Minutes |> Ash.Changeset.for_create(:upsert, %{key: k}) |> Ash.create!()
-
-    for k <- ["r1", "r2"],
-        do: Resolutions |> Ash.Changeset.for_create(:upsert, %{key: k}) |> Ash.create!()
+    # seed the SOURCE; `minutes` and `resolutions` derive from it
+    for {k, kind} <- [{"m1", "minutes"}, {"r1", "resolution"}, {"r2", "resolution"}] do
+      CouncilPortal |> Ash.Changeset.for_create(:upsert, %{key: k, kind: kind}) |> Ash.create!()
+    end
 
     p = plan()
 
     for id <- [
+          "minutes",
+          "resolutions",
           "category_health",
           "spend_rollup",
           "all_verdicts",

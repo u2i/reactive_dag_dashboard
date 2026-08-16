@@ -220,7 +220,7 @@ defmodule ReactiveDagDashboard.LayoutTest do
     test "the page itself renders the same either way" do
       {:ok, _view, html} = live(build_conn(), "/admin/dag")
 
-      assert html =~ "sources"
+      assert html =~ "expression"
     end
   end
 end

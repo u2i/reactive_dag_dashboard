@@ -11,6 +11,8 @@ defmodule ReactiveDagDashboard.Components do
   """
   use Phoenix.Component
 
+  alias Phoenix.LiveView.JS
+
   alias ReactiveDagDashboard.NodeDetail
 
   attr(:sources, :list, required: true)
@@ -82,30 +84,71 @@ defmodule ReactiveDagDashboard.Components do
   attr(:plan, :map, required: true)
 
   @doc """
-  The hierarchy: what a change reaches, drawn as structure.
+  The hierarchy: what a change reaches, as an EXPRESSION.
 
-  One row per step of the tree, indented by depth, each naming the operation it
-  performs — the operator IS the relationship, and a bare arrow says nothing
-  about whether an input is folded, joined or picked as one of several
-  alternatives.
+  Each row renders the node as a function application —
+  `reduce( folded: expenses ) by :category` — so an edge says what the input IS
+  to the node reading it. A join's left and right are not interchangeable, a
+  union's inputs are alternatives, and a bare arrow says neither.
+
+  Collapsed below depth 1 by default, with a child count on every collapsible
+  row: a 7-deep graph is unreadable fully expanded, and a collapsed row with no
+  count looks like a leaf.
+
+  Toggling is `Phoenix.LiveView.JS` — a class flip in the browser, no server
+  round-trip, so opening a branch costs nothing.
   """
   def hierarchy(assigns) do
     ~H"""
-    <ul class="menu menu-sm w-full p-0">
-      <li :for={row <- @rows}>
-        <button
-          type="button"
-          phx-click="select"
-          phx-value-cell={row.id}
-          class={["flex items-baseline gap-2 py-1", row.id == @selected && "active"]}
-          style={"padding-left: #{row.depth * 1.25 + 0.5}rem"}
-        >
-          <span class="font-mono text-xs opacity-30"><%= branch(row) %></span>
-          <span class="font-medium"><%= row.id %></span>
+    <div class="flex items-center gap-2 mb-1">
+      <button
+        type="button"
+        class="btn btn-ghost btn-xs"
+        phx-click={
+          JS.remove_class("hidden", to: ".rdd-kids") |> JS.add_class("rotate-90", to: ".rdd-chev")
+        }
+      >
+        expand all
+      </button>
+      <button
+        type="button"
+        class="btn btn-ghost btn-xs"
+        phx-click={
+          JS.add_class("hidden", to: ".rdd-kids") |> JS.remove_class("rotate-90", to: ".rdd-chev")
+        }
+      >
+        collapse
+      </button>
+    </div>
 
-          <span :if={op_label(row)} class="badge badge-ghost badge-xs font-mono">
-            <%= op_label(row) %>
+    <ul class="menu menu-sm w-full p-0 gap-0">
+      <li :for={row <- @rows} id={"row-#{row.path}"} class={["rdd-kids", row.depth > 1 && "hidden"]}>
+        <div
+          class={[
+            "flex items-baseline gap-2 py-1 px-2 rounded",
+            row.id == @selected && "bg-base-300",
+            row.routes > 1 && "rdd-many"
+          ]}
+          style={"margin-left: #{row.depth * 1.25}rem"}
+        >
+          <span
+            :if={row.children > 0}
+            class="rdd-chev font-mono text-xs opacity-40 cursor-pointer"
+            phx-click={toggle_kids(row)}
+          >
+            ▸
           </span>
+          <span :if={row.children == 0} class="font-mono text-xs opacity-0">▸</span>
+
+          <button type="button" phx-click="select" phx-value-cell={row.id} class="font-medium">
+            <%= row.id %>
+          </button>
+
+          <span :if={row.children > 0} class="badge badge-ghost badge-xs">
+            <%= row.children %>
+          </span>
+
+          <code :if={application(row)} class="text-xs opacity-70"><%= application(row) %></code>
 
           <span :if={row.routes > 1} class="badge badge-outline badge-xs">
             <%= row.routes %> routes
@@ -118,17 +161,23 @@ defmodule ReactiveDagDashboard.Components do
             <%= status %> <%= n %>
           </span>
 
-          <span
-            class="text-xs opacity-50 tabular-nums ml-auto"
-            title={count_title(@status[row.id])}
-          >
+          <span class="text-xs opacity-50 tabular-nums ml-auto" title={count_title(@status[row.id])}>
             <%= key_count(@status[row.id]) %>
           </span>
-        </button>
+        </div>
       </li>
     </ul>
     """
   end
+
+  # Collapse this row's whole subtree. Paths are prefixes — "r-0" contains
+  # "r-0-1" and "r-0-1-2" — so one selector reaches every descendant.
+  defp toggle_kids(row) do
+    JS.toggle_class("rotate-90")
+    |> JS.toggle(to: "[id^='row-#{row.path}-']")
+  end
+
+  defp application(row), do: ReactiveDagDashboard.Algebra.application(row.cell)
 
   attr(:detail, :map, default: nil)
 
@@ -261,13 +310,133 @@ defmodule ReactiveDagDashboard.Components do
     """
   end
 
+  attr(:levels, :list, required: true)
+  attr(:edges, :list, required: true)
+  attr(:status, :map, required: true)
+  attr(:selected, :string, default: nil)
+  attr(:plan, :map, required: true)
+
+  @doc """
+  The graph as a drawn diagram: nodes in columns by depth, edges as real lines.
+
+  The tree answers *"what does a change here reach"* and has to repeat a cell
+  once per route to do it. This answers *"what is the shape of the whole
+  thing"*, which a tree cannot: two routes converging on one node are two lines
+  meeting, drawn once.
+
+  Layout is the graph's own depth — `Insights.levels/1` is already
+  longest-path-from-a-leaf, which is exactly the column assignment a layered DAG
+  wants, so there is no layout algorithm here at all. Nodes stack within their
+  column; edges are horizontal-tangent cubic Béziers, which read as flow without
+  needing arrowheads at this size.
+
+  Hovering a node dims everything except it and its edges. That is the whole
+  interaction: a full ancestor/descendant trace would be better and needs a
+  reachability walk per node, which is worth doing once this earns its place.
+  """
+  def graph(assigns) do
+    assigns = assign(assigns, :geometry, geometry(assigns.levels))
+
+    ~H"""
+    <div class="overflow-x-auto border border-base-300 rounded-lg bg-base-200">
+      <svg
+        viewBox={"0 0 #{@geometry.width} #{@geometry.height}"}
+        width={@geometry.width}
+        height={@geometry.height}
+        class="rdd-graph"
+      >
+        <path
+          :for={{from, to} <- @edges}
+          :if={@geometry.at[from] && @geometry.at[to]}
+          d={edge_path(@geometry.at[from], @geometry.at[to])}
+          class={[
+            "rdd-edge",
+            (from == @selected or to == @selected) && "rdd-edge-hot"
+          ]}
+          fill="none"
+        />
+
+        <g :for={{id, box} <- @geometry.at} class="rdd-gnode">
+          <rect
+            :if={converging?(@edges, id)}
+            x={box.x + 3}
+            y={box.y + 3}
+            width={box.w}
+            height={box.h}
+            rx="4"
+            class="rdd-gstack"
+          />
+
+          <rect
+            x={box.x}
+            y={box.y}
+            width={box.w}
+            height={box.h}
+            rx="4"
+            class={["rdd-gbox", id == @selected && "rdd-gbox-on"]}
+            phx-click="select"
+            phx-value-cell={id}
+          />
+
+          <text x={box.x + 8} y={box.y + 18} class="rdd-gtext"><%= id %></text>
+          <text x={box.x + 8} y={box.y + 31} class="rdd-gsub"><%= key_count(@status[id]) %></text>
+        </g>
+      </svg>
+    </div>
+    """
+  end
+
+  # Columns are the graph's depth; rows are position within the column. No
+  # layout algorithm — `Insights.levels/1` already grouped by longest path from
+  # a leaf, which IS the layered-DAG assignment.
+  @col_w 190
+  @col_gap 60
+  @row_h 44
+  @row_gap 16
+  @pad 20
+
+  defp geometry(levels) do
+    at =
+      for {{_depth, cells}, col} <- Enum.with_index(levels),
+          {cell, row} <- Enum.with_index(cells),
+          into: %{} do
+        {cell.id,
+         %{
+           x: @pad + col * (@col_w + @col_gap),
+           y: @pad + row * (@row_h + @row_gap),
+           w: @col_w,
+           h: @row_h
+         }}
+      end
+
+    tallest = levels |> Enum.map(fn {_d, cells} -> length(cells) end) |> Enum.max(fn -> 1 end)
+
+    %{
+      at: at,
+      width: @pad * 2 + length(levels) * (@col_w + @col_gap),
+      height: @pad * 2 + tallest * (@row_h + @row_gap)
+    }
+  end
+
+  # A horizontal-tangent cubic: it leaves the source rightward and arrives
+  # leftward, so the direction of flow reads without arrowheads.
+  defp edge_path(from, to) do
+    x1 = from.x + from.w
+    y1 = from.y + from.h / 2
+    x2 = to.x
+    y2 = to.y + to.h / 2
+    mx = (x1 + x2) / 2
+
+    "M#{x1},#{y1} C#{mx},#{y1} #{mx},#{y2} #{x2},#{y2}"
+  end
+
+  # more than one edge INTO a node: drawn as a stacked card, the same glyph the
+  # tree uses for a cell reached by several routes
+  defp converging?(edges, id) do
+    edges |> Enum.count(fn {_from, to} -> to == id end) > 1
+  end
+
   # ── helpers ─────────────────────────────────────────────────────────────────
-
-  defp branch(%{depth: 0}), do: ""
-  defp branch(%{last?: true}), do: "└─"
-  defp branch(_), do: "├─"
-
-  defp op_label(row), do: ReactiveDagDashboard.Algebra.label(row.cell)
 
   defp short(mod) when is_atom(mod), do: mod |> Module.split() |> List.last()
   defp short(other), do: inspect(other)

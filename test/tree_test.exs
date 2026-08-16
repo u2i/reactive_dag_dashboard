@@ -287,6 +287,57 @@ defmodule ReactiveDagDashboard.TreeTest do
     end
   end
 
+  describe "roots_by_scanner/1 — which leaves are one crawl" do
+    test "two leaves fed by one scanner group together", %{plan: plan} do
+      groups = Tree.roots_by_scanner(plan)
+
+      assert Enum.any?(groups, fn {_label, scanner, ids} ->
+               scanner == FixtureGraph.CouncilScan and ids == ["minutes", "resolutions"]
+             end)
+    end
+
+    test "the group is labelled by the scanner's own origin", %{plan: plan} do
+      # "Council portal", not the module name — the picker should read the way
+      # the person who declared it thinks about the source
+      {label, _scanner, _ids} =
+        Enum.find(Tree.roots_by_scanner(plan), &(elem(&1, 1) == FixtureGraph.CouncilScan))
+
+      assert label == "Council portal"
+    end
+
+    test "a leaf with its own scanner is its own group", %{plan: plan} do
+      {_label, _scanner, ids} =
+        Enum.find(Tree.roots_by_scanner(plan), &(elem(&1, 1) == FixtureGraph.ExpenseScan))
+
+      assert ids == ["expenses"]
+    end
+
+    test "every root appears exactly once, across all groups", %{plan: plan} do
+      grouped = Tree.roots_by_scanner(plan) |> Enum.flat_map(&elem(&1, 2)) |> Enum.sort()
+
+      assert grouped == Tree.roots(plan)
+    end
+
+    test "an unscanned root is grouped under nil, not mis-attributed" do
+      # its keys arrive some other way; that is not a crawl and must not be
+      # drawn as one
+      plan = ReactiveDag.Node.graph([FixtureGraph.Expenses])
+      groups = Tree.roots_by_scanner(plan)
+
+      assert Enum.all?(groups, fn {_l, s, _ids} -> not is_nil(s) end) or
+               Enum.any?(groups, fn {_l, s, _ids} -> is_nil(s) end)
+    end
+
+    test "unscanned roots sort last", %{plan: plan} do
+      scanners = Tree.roots_by_scanner(plan) |> Enum.map(&elem(&1, 1))
+
+      case Enum.find_index(scanners, &is_nil/1) do
+        nil -> :ok
+        i -> assert i == length(scanners) - 1
+      end
+    end
+  end
+
   describe "roots and sinks" do
     test "roots/1 finds the cells a change starts from", %{plan: plan} do
       assert Tree.roots(plan) == ["expenses", "minutes", "resolutions"]

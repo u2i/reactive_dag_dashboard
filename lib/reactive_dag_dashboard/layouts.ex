@@ -116,6 +116,14 @@ defmodule ReactiveDagDashboard.Layouts do
           .rdd-ref-row { opacity: .5; }
           .rdd-ref { font-style: italic; }
 
+          /* leaves grouped by the crawl that feeds them: two halves of one
+             crawl read as two independent sources when listed side by side */
+          .rdd-group { margin-bottom: .75rem; }
+          .rdd-group-label { font-size: .6875rem; text-transform: uppercase;
+                             letter-spacing: .06em; opacity: .6; font-weight: 600;
+                             margin: 0 0 .25rem; }
+          .rdd-unscanned { opacity: .4; font-style: italic; }
+
           /* live vs polling — stated, not inferred */
           .rdd-live { margin-left: auto; font-size: .6875rem; letter-spacing: .06em;
                       text-transform: uppercase; display: inline-flex;

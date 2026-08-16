@@ -83,6 +83,7 @@ defmodule ReactiveDagDashboard.TreeLive do
     |> assign(:plan, plan)
     |> assign(:status, Map.new(Insights.summary(plan), &{&1.id, &1}))
     |> assign(:roots, Tree.roots(plan))
+    |> assign(:root_groups, Tree.roots_by_scanner(plan))
     |> assign(:sinks, Tree.sinks(plan))
   end
 
@@ -146,7 +147,31 @@ defmodule ReactiveDagDashboard.TreeLive do
 
       <h1><%= heading(@direction) %></h1>
 
-      <section class="rdd-picker">
+      <section :if={@direction != :upstream} class="rdd-picker">
+        <h2><%= picker_label(@direction) %></h2>
+
+        <div :for={{origin, scanner, ids} <- @root_groups} class="rdd-group">
+          <h3 :if={scanner} class="rdd-group-label">
+            <%= origin %>
+            <span :if={length(ids) > 1} class="rdd-note">
+              one crawl, <%= length(ids) %> leaves
+            </span>
+          </h3>
+          <h3 :if={is_nil(scanner)} class="rdd-group-label rdd-unscanned">
+            no scanner declared
+          </h3>
+
+          <ul>
+            <li :for={id <- ids} class="rdd-cell">
+              <.link patch={"#{@base_path}#{segment(@direction)}/#{id}"} class={picked(id, @selected)}>
+                <%= id %>
+              </.link>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section :if={@direction == :upstream} class="rdd-picker">
         <h2><%= picker_label(@direction) %></h2>
         <ul>
           <li :for={id <- pickable(@direction, @roots, @sinks)} class="rdd-cell">

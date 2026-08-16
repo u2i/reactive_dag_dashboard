@@ -29,6 +29,22 @@ defmodule ReactiveDagDashboard.TreeLiveTest do
       assert html =~ "expenses"
     end
 
+    test "leaves are grouped by the crawl that feeds them" do
+      # listed side by side, two halves of one crawl read as two independent
+      # sources — which is exactly how it looked before this
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from")
+
+      assert html =~ "Council portal", "the scanner's own origin label"
+      assert html =~ "one crawl, 2 leaves"
+    end
+
+    test "a single-leaf scanner is not labelled as a multi-leaf crawl" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/from")
+
+      assert html =~ "Finance export"
+      refute html =~ "one crawl, 1 leaves"
+    end
+
     test "the default is a hierarchy: children under parents" do
       {:ok, _view, html} = live(build_conn(), "#{@path}/from/expenses")
 

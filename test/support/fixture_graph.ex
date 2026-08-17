@@ -314,6 +314,13 @@ defmodule ReactiveDagDashboard.FixtureGraph do
     def poll(opts) do
       if Process.whereis(__MODULE__), do: Agent.update(__MODULE__, &[opts | &1])
 
+      # Progress from INSIDE the poll, as a real crawler does. Without this the
+      # only test coverage was hand-fired telemetry, which cannot catch a break
+      # in the path a scan click actually takes.
+      for n <- 1..3 do
+        ReactiveDag.Source.progress(n, 3, cell: "expenses", label: "documents")
+      end
+
       # a deep pass reaches an upstream the cheap one never touches, and that
       # upstream is down — the shape a real crawler hits on a full crawl
       unreachable = if opts[:recent] == false, do: [{"archive", :timeout}], else: []

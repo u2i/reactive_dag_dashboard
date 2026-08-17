@@ -323,6 +323,11 @@ defmodule ReactiveDagDashboard.Components do
                        text-transform: none; letter-spacing: 0;
                        background: color-mix(in srgb, var(--accent) 18%, transparent);
                        color: var(--accent) }
+      /* a poll that failed, or one that could not see everything. An outage must
+         never be tinted like a clean result — "nothing changed" and "I could not
+         look" are different answers. */
+      .rdd-ran-bad { background: color-mix(in srgb, var(--gap) 20%, transparent);
+                     color: #e8918a }
       @media (prefers-reduced-motion: reduce) {
         .rdd-ran { animation: none }
       }
@@ -558,9 +563,17 @@ defmodule ReactiveDagDashboard.Components do
             <%!-- The cascade, as it travels. A `:drain_step` arrives per cell in
                   depth order, so a row that has an entry has RUN — and the
                   trail outlives the drain, because the run you just watched is
-                  the one whose results you want to read. --%>
-            <span :if={@activity[@node.id]} class="rdd-ran-badge">
-              ran · <%= @activity[@node.id].changed %> changed
+                  the one whose results you want to read.
+
+                  A SCAN entry lands here too, and it is the one that most needs
+                  to: a poll that found nothing dirties nothing, produces no
+                  step, and would otherwise leave this row identical to one where
+                  the button was never pressed. --%>
+            <span
+              :if={activity_label(@activity[@node.id])}
+              class={["rdd-ran-badge", activity_class(@activity[@node.id])]}
+            >
+              <%= activity_label(@activity[@node.id]) %>
             </span>
 
             <span :if={@node.children > 1} class="rdd-ccount"><%= @node.children %></span>
@@ -763,6 +776,34 @@ defmodule ReactiveDagDashboard.Components do
       [] -> nil
     end
   end
+
+  # What a row's trail says it did. Nil when there is nothing to say, so the
+  # badge is absent rather than empty.
+  #
+  # A scan and a recompute are different events and read differently: "polled"
+  # answers *did the crawl run*, "ran" answers *did this cell recompute*. A cell
+  # can have both in one burst — the poll found rows and the drain reached it —
+  # and then the recompute is the more specific fact, so it wins.
+  defp activity_label(nil), do: nil
+
+  defp activity_label(%{changed: n}), do: "ran · #{n} changed"
+
+  defp activity_label(%{scan: :running}), do: "polling…"
+  defp activity_label(%{scan: :failed}), do: "poll failed"
+
+  defp activity_label(%{scan: %{changed: 0, unreachable: []}}), do: "polled · no change"
+
+  defp activity_label(%{scan: %{changed: 0, unreachable: up}}) when up != [],
+    do: "polled · #{length(up)} unreachable"
+
+  defp activity_label(%{scan: %{changed: n}}), do: "polled · #{n} found"
+
+  defp activity_label(_), do: nil
+
+  # A failure and an outage are not successes and must not be tinted like one.
+  defp activity_class(%{scan: :failed}), do: "rdd-ran-bad"
+  defp activity_class(%{scan: %{unreachable: up}}) when up != [], do: "rdd-ran-bad"
+  defp activity_class(_), do: nil
 
   # The spine's colour says what KIND of node this is before the label is read:
   # where data ENTERS the graph, where it is COMBINED, and where it is merely

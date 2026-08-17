@@ -102,7 +102,10 @@ defmodule ReactiveDagDashboard.DagLive do
     {message, reload?} =
       case Actions.enqueue_scan(cell_id, mode, params, socket.assigns) do
         :queued ->
-          {"scan of #{scope} queued — results appear as it drains", false}
+          # "as it drains" was a promise the page could not keep: a poll that
+          # finds nothing never drains, so nothing appeared and the button looked
+          # broken. The scan events now arrive either way.
+          {"scan of #{scope} queued — waiting for it to run", false}
 
         {:ran, %{unreachable: []} = result} ->
           {"scanned #{scope}: #{Actions.summarise(result)}#{Actions.across_leaves(result)}", true}
@@ -170,7 +173,53 @@ defmodule ReactiveDagDashboard.DagLive do
 
   def handle_info(:clear_trail, socket), do: {:noreply, LiveUpdates.clear_trail(socket)}
 
+  # ── the scan half ───────────────────────────────────────────────────────────
+  #
+  # A queued scan told the page "results appear as it drains" and then, if the
+  # poll found nothing, produced no events at all: a no-op scan dirties nothing,
+  # so no `:drain_step` ever arrives. The promise went unkept and the button
+  # looked broken on exactly the runs where it worked perfectly.
+
+  def handle_info({:scan_started, cell_id}, socket) do
+    {:noreply,
+     socket
+     |> LiveUpdates.seen_event()
+     |> LiveUpdates.record_scan(cell_id, :running)
+     |> assign(:message, "scanning #{cell_id}…")}
+  end
+
+  def handle_info({:scan_done, cell_id, result}, socket) do
+    {:noreply,
+     socket
+     |> LiveUpdates.seen_event()
+     |> LiveUpdates.record_scan(cell_id, result)
+     |> assign(:message, scan_outcome(cell_id, result))
+     |> load()
+     |> assign_view()}
+  end
+
+  def handle_info({:scan_failed, cell_id, reason}, socket) do
+    {:noreply,
+     socket
+     |> LiveUpdates.seen_event()
+     |> LiveUpdates.record_scan(cell_id, :failed)
+     |> assign(:message, "scan of #{cell_id} failed: #{inspect(reason)}")}
+  end
+
   def handle_info(:refresh, socket), do: {:noreply, socket |> load() |> assign_view()}
+
+  # "nothing changed" is an ANSWER, not an absence — and distinct again from a
+  # scan that could not see: an outage must never render as a clean empty result.
+  defp scan_outcome(cell_id, %{changed: 0, unreachable: []}),
+    do: "scanned #{cell_id} — nothing changed"
+
+  defp scan_outcome(cell_id, %{changed: n, unreachable: []}),
+    do: "scanned #{cell_id} — #{n} key#{if n == 1, do: "", else: "s"} changed"
+
+  defp scan_outcome(cell_id, %{changed: n, unreachable: up}),
+    do:
+      "scanned #{cell_id} — #{n} changed, #{length(up)} upstream(s) unreachable, " <>
+        "so results are incomplete"
 
   # ── assembling what the page shows ──────────────────────────────────────────
 

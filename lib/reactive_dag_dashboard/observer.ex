@@ -21,6 +21,14 @@ defmodule ReactiveDagDashboard.Observer do
       {:drain_step, cell_id, changed_keys}   after each cell recomputes
       {:drain_done, report}                  when the drain finishes
       {:drain_failed, reason}                when it raised
+      {:scan_started, cell_id}               a poll began
+      {:scan_done, cell_id, result}          a poll finished, changed or not
+      {:scan_failed, cell_id, reason}        it raised
+
+  `:scan_done` carries `%{changed:, unreachable:}` because a scan that changed
+  NOTHING is a real outcome and the page has to be able to say so. Without it the
+  only evidence a queued scan ran was a `:drain_step`, which a no-op poll never
+  produces.
 
   `:drain_step` names the cell and its changed keys, which is what lets a view
   refresh **only that cell** rather than re-reading the graph. That distinction
@@ -45,7 +53,14 @@ defmodule ReactiveDagDashboard.Observer do
   @events [
     [:reactive_dag, :drain, :step],
     [:reactive_dag, :drain, :stop],
-    [:reactive_dag, :drain, :exception]
+    [:reactive_dag, :drain, :exception],
+    # The SCAN half. A poll that finds nothing dirties nothing, so it emits no
+    # `:drain, :step` at all — and a page told only about steps cannot tell a
+    # scan that found nothing from a scan that never ran. Both looked like the
+    # button doing nothing, which is how a working scan reads as broken.
+    [:reactive_dag, :scan, :start],
+    [:reactive_dag, :scan, :stop],
+    [:reactive_dag, :scan, :exception]
   ]
 
   @doc "The PubSub topic drain events are broadcast on."
@@ -95,6 +110,28 @@ defmodule ReactiveDagDashboard.Observer do
 
   def handle([:reactive_dag, :drain, :exception], _measurements, metadata, %{pubsub: pubsub}) do
     broadcast(pubsub, {:drain_failed, metadata.reason})
+  end
+
+  def handle([:reactive_dag, :scan, :start], _measurements, metadata, %{pubsub: pubsub}) do
+    broadcast(pubsub, {:scan_started, metadata.cell})
+  end
+
+  # `changed` and `unreachable` only — not the whole report. What a page needs is
+  # "did this poll find anything, and could it see everything", and a scan that
+  # found nothing must arrive as an event rather than as silence.
+  def handle([:reactive_dag, :scan, :stop], measurements, metadata, %{pubsub: pubsub}) do
+    broadcast(
+      pubsub,
+      {:scan_done, metadata.cell,
+       %{
+         changed: Map.get(measurements, :changed, 0),
+         unreachable: Map.get(metadata, :unreachable, [])
+       }}
+    )
+  end
+
+  def handle([:reactive_dag, :scan, :exception], _measurements, metadata, %{pubsub: pubsub}) do
+    broadcast(pubsub, {:scan_failed, metadata.cell, metadata.reason})
   end
 
   defp broadcast(pubsub, message) do

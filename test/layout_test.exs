@@ -149,22 +149,28 @@ defmodule ReactiveDagDashboard.LayoutTest do
       assert html =~ "LiveSocket never connects", "says what breaks, not just what is unset"
     end
 
-    test "an unset css_path likewise" do
+    test "an unset css_path is NOT a warning — the dashboard ships its own CSS" do
+      # it was required when the page was built from daisyUI class names it did
+      # not ship. Warning about an optional override would be crying wolf, and
+      # the page below proves it is genuinely styled without one.
       Application.put_env(:reactive_dag_dashboard, :css_path, nil)
       Application.put_env(:reactive_dag_dashboard, :js_path, "/assets/app.js")
 
       {:ok, _view, html} = live(build_conn(), @path)
 
-      assert html =~ "missing css_path"
+      refute html =~ "missing css_path"
+      refute html =~ "is missing"
+      assert html =~ ".rdd-row", "and it is styled anyway"
     end
 
-    test "both unset names both" do
+    test "only js_path is named when both are unset" do
       Application.put_env(:reactive_dag_dashboard, :css_path, nil)
       Application.put_env(:reactive_dag_dashboard, :js_path, nil)
 
       {:ok, _view, html} = live(build_conn(), @path)
 
-      assert html =~ "css_path and js_path"
+      assert html =~ "missing js_path"
+      refute html =~ "css_path and js_path"
     end
 
     test "and it carries the config to paste" do
@@ -236,8 +242,9 @@ defmodule ReactiveDagDashboard.LayoutTest do
       {:ok, _view, html} = live(build_conn(), "/admin/dag")
 
       assert html =~ ".rdd-row", "the tree's cards"
-      assert html =~ ".rdd-lead-source", "the kind spine"
+      assert html =~ ".rdd-source > .rdd-row > .rdd-lead", "the kind spine"
       assert html =~ ".rdd-gbox", "the graph's boxes"
+      assert html =~ ".rdd-children", "the nesting rail"
     end
 
     test "and they are identical to what the dashboard's own layout serves" do
@@ -255,15 +262,21 @@ defmodule ReactiveDagDashboard.LayoutTest do
       # it wraps already carries them, and a second copy is one to keep in step
       {:ok, _view, html} = live(build_conn(), "/ops/dag")
 
-      assert length(Regex.scan(~r/\.rdd-row \{/, html)) == 1
+      # anchored at line start, so `.rdd-many > .rdd-row {` does not count as a
+      # second definition of `.rdd-row` itself
+      assert length(Regex.scan(~r/^\s*\.rdd-row \{/m, html)) == 1
     end
   end
 
+  # The PAGE's stylesheet only. This library's own layout carries a small
+  # `<style>` of its own for the document ground and the missing-config warning
+  # — which must not depend on the page's CSS, since it fires when the page is
+  # broken — and matching `.rdd-` alone would sweep that in.
   defp styles_of(html) do
     ~r/<style>(.*?)<\/style>/s
     |> Regex.scan(html, capture: :all_but_first)
     |> List.flatten()
-    |> Enum.filter(&(&1 =~ ".rdd-"))
+    |> Enum.filter(&(&1 =~ ".rdd-row"))
     |> Enum.join()
     |> String.trim()
   end

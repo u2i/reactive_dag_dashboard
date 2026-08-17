@@ -165,62 +165,50 @@ defmodule ReactiveDagDashboard.DagLive do
     |> assign(:sources, NodeDetail.sources(plan, controls))
     |> assign(:status, Map.new(Insights.summary(plan), &{&1.id, &1}))
     |> assign(:pending, MapSet.new(Insights.pending(plan)))
+    # every cell, grouped — what the picker offers. A page that can only start
+    # from a source or a sink cannot answer "what feeds this" about the half of
+    # a real graph that is neither.
+    |> assign(:groups, Tree.groups(plan))
   end
 
   defp assign_view(%{assigns: %{selected: nil}} = socket) do
     socket
-    |> assign(:rows, [])
+    |> assign(:node, nil)
     |> assign(:detail, nil)
     |> assign(:routes, 0)
     |> assign(:bands, [])
+    |> assign(:dead_end?, false)
   end
 
   defp assign_view(%{assigns: %{plan: plan, selected: id, direction: dir}} = socket) do
     tree = tree_for(plan, id, dir)
 
     socket
-    |> assign(:rows, Tree.hierarchy(plan, tree))
+    # NESTED, not flattened: the markup recurses so containment is real
+    # structure rather than a computed margin. See Components.hierarchy/1.
+    |> assign(:node, Tree.nested(plan, tree))
     |> assign(:routes, Tree.path_count(tree))
     # The diagram's scope, from the same tree the expression uses. Whole-plan
     # levels drew every cell at once, which at real graph sizes is a tangle no
     # amount of styling rescues (u2i/reactive_dag_dashboard#28).
     |> assign(:bands, Tree.levels(plan, tree))
     |> assign(:detail, NodeDetail.build(plan, id, socket.assigns.controls))
+    # a source has nothing above it and an output nothing below: one direction
+    # of each is a single node with no tree, which renders as an empty panel
+    # and reads as broken unless the page says which way to look
+    |> assign(:dead_end?, not Tree.has_tree?(plan, id, dir))
   end
 
   defp tree_for(plan, id, :upstream), do: Tree.upstream(plan, id)
   defp tree_for(plan, id, _downstream), do: Tree.downstream(plan, id)
 
-  # Which trees the page shows, and what heads each one.
+  # `panels/1` and `rows_for/2` are gone. The page rendered one panel per SOURCE
+  # downstream and one rooted at the selection upstream, which made switching
+  # targets a different gesture in each direction — and upstream had no picker
+  # at all, so clicking a node silently re-rooted the page and the node you
+  # clicked vanished into the root position.
   #
-  # Downstream, that is the SOURCES — one panel per crawl, so the sources are
-  # the structure rather than a list above it, and each panel carries its own
-  # cadence and scan button.
-  #
-  # Upstream inverts the question: "what feeds this" is asked OF a cell, so the
-  # panel is the selected cell alone. Showing every sink's ancestry at once
-  # would be the same wall of nodes the sources list was.
-  defp panels(%{direction: :upstream, selected: nil}), do: []
-
-  defp panels(%{direction: :upstream, selected: id}),
-    do: [%{cell: id, title: id, every: nil, scannable?: false}]
-
-  defp panels(%{sources: sources, controls: controls}) do
-    for s <- sources do
-      %{
-        cell: s.cell,
-        title: s.origin || s.cell,
-        every: s.every,
-        scannable?: Map.has_key?(controls, s.cell)
-      }
-    end
-  end
-
-  defp rows_for(%{plan: plan, direction: :upstream}, cell_id),
-    do: plan |> Tree.upstream(cell_id) |> then(&Tree.hierarchy(plan, &1))
-
-  defp rows_for(%{plan: plan}, cell_id),
-    do: plan |> Tree.downstream(cell_id) |> then(&Tree.hierarchy(plan, &1))
+  # One tree, one root, either direction, chosen from a picker over every cell.
 
   # With nothing named, start where a change enters — the question people
   # arrive with is almost always "what happened to X", and X came from a source.
@@ -272,47 +260,63 @@ defmodule ReactiveDagDashboard.DagLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <main class="p-6 max-w-5xl mx-auto">
-      <%!-- The component styles travel WITH the page, so a host that supplies
-            its own `root_layout:` — which the docs recommend, and which cascade
-            does — still gets the tree's cards and the graph's strokes. They
-            used to live only in this library's own layout, so overriding it
-            silently dropped them: the page kept its daisyUI classes and looked
-            styled, while the tree lost its structure and the SVG drew nothing. --%>
+    <main class="rdd">
+      <%!-- The styles travel WITH the page, so a host that supplies its own
+            `root_layout:` — which the docs recommend, and which cascade does —
+            still gets them. They used to live only in this library's own
+            layout, so overriding it silently dropped every rule. --%>
       <.styles />
 
-      <div class="flex items-baseline justify-between mb-4">
-        <h1 class="text-xl font-semibold">reactive_dag</h1>
-        <span class={["badge badge-sm", @live? && "badge-success" || "badge-ghost"]}>
+      <header class="rdd-head">
+        <h1>reactive_dag</h1>
+        <span class={["rdd-badge", (@live? && "rdd-b-ok") || "rdd-b-mute"]}>
           <%= if @live?, do: "live", else: "polling" %>
         </span>
-      </div>
+      </header>
 
-      <div :if={@message} class="alert alert-info py-2 mb-4 text-sm">
-        <%= @message %>
-      </div>
+      <div :if={@message} class="rdd-alert"><%= @message %></div>
 
-      <div class="tabs tabs-boxed tabs-sm w-fit mb-4">
-        <button
-          class={["tab", @view == :tree && "tab-active"]}
-          phx-click="view"
-          phx-value-to="tree"
-        >
+      <nav class="rdd-tabs">
+        <button class={["rdd-tab", @view == :tree && "on"]} phx-click="view" phx-value-to="tree">
           expression
         </button>
-        <button
-          class={["tab", @view == :graph && "tab-active"]}
-          phx-click="view"
-          phx-value-to="graph"
-        >
+        <button class={["rdd-tab", @view == :graph && "on"]} phx-click="view" phx-value-to="graph">
           graph
         </button>
-      </div>
+      </nav>
 
-      <div class="flex items-center gap-2 mb-3">
-        <div class="join">
+      <%!-- The picker. Downstream used to render one panel per source and
+            upstream a single panel rooted at the selection, so switching
+            targets was a different gesture in each direction — and upstream had
+            none at all: clicking a node silently re-rooted the whole page.
+            Half a real graph is neither source nor sink, and none of it could
+            be a starting point. --%>
+      <div class="rdd-bar">
+        <span class="rdd-bar-lab">rooted at</span>
+
+        <div class="rdd-picker">
+          <button class="rdd-pick" phx-click={JS.toggle(to: "#rdd-menu")}>
+            <%= @selected || "—" %> <span class="rdd-caret">▾</span>
+          </button>
+
+          <div id="rdd-menu" class="rdd-menu hidden" phx-click-away={JS.hide(to: "#rdd-menu")}>
+            <div :for={{label, ids} <- @groups} class="rdd-menu-group">
+              <div class="rdd-menu-head"><%= label %> <span><%= length(ids) %></span></div>
+              <button
+                :for={id <- ids}
+                class={["rdd-menu-item", id == @selected && "on"]}
+                phx-click={JS.hide(to: "#rdd-menu") |> JS.push("select")}
+                phx-value-cell={id}
+              >
+                <%= id %>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="rdd-seg">
           <button
-            class={["btn btn-xs join-item", @direction == :downstream && "btn-active"]}
+            class={["rdd-segbtn", @direction == :downstream && "on"]}
             phx-click="direction"
             phx-value-to="downstream"
             title="what a change to this reaches"
@@ -320,7 +324,7 @@ defmodule ReactiveDagDashboard.DagLive do
             downstream
           </button>
           <button
-            class={["btn btn-xs join-item", @direction == :upstream && "btn-active"]}
+            class={["rdd-segbtn", @direction == :upstream && "on"]}
             phx-click="direction"
             phx-value-to="upstream"
             title="what feeds this"
@@ -329,12 +333,12 @@ defmodule ReactiveDagDashboard.DagLive do
           </button>
         </div>
 
-        <span :if={@view == :tree} class="ml-2 flex items-center gap-2">
+        <span :if={@view == :tree and not @dead_end?} class="rdd-bar-acts">
           <button
             type="button"
-            class="btn btn-ghost btn-xs"
+            class="rdd-btn rdd-ghost"
             phx-click={
-              JS.remove_class("hidden", to: ".rdd-kids")
+              JS.remove_class("hidden", to: ".rdd-children")
               |> JS.add_class("rotate-90", to: ".rdd-chev")
             }
           >
@@ -342,9 +346,9 @@ defmodule ReactiveDagDashboard.DagLive do
           </button>
           <button
             type="button"
-            class="btn btn-ghost btn-xs"
+            class="rdd-btn rdd-ghost"
             phx-click={
-              JS.add_class("hidden", to: ".rdd-kids")
+              JS.add_class("hidden", to: ".rdd-children")
               |> JS.remove_class("rotate-90", to: ".rdd-chev")
             }
           >
@@ -352,54 +356,41 @@ defmodule ReactiveDagDashboard.DagLive do
           </button>
         </span>
 
-        <span class="text-xs opacity-40 ml-auto">
+        <span :if={not @dead_end?} class="rdd-routes">
           <%= @routes %> route<%= if @routes == 1, do: "", else: "s" %>
         </span>
       </div>
 
-      <div :if={@view == :graph}>
-        <.graph
-          levels={@bands}
-          status={@status}
-          selected={@selected}
-          plan={@plan}
-        />
-        <p class="text-xs opacity-40 mt-1">
+      <%!-- A source has nothing above it and an output nothing below. That is
+            an answer, not an error, but an empty panel reads as broken — so say
+            it, and offer the direction that does have something. --%>
+      <div :if={@dead_end?} class="rdd-empty">
+        <p>
+          <strong><%= @selected %></strong>
+          <%= if @direction == :upstream,
+            do: "is a source — nothing in this graph feeds it.",
+            else: "is an output — nothing in this graph reads it." %>
+        </p>
+        <button
+          class="rdd-btn"
+          phx-click="direction"
+          phx-value-to={if @direction == :upstream, do: "downstream", else: "upstream"}
+        >
+          <%= if @direction == :upstream, do: "see what it reaches →", else: "← see what feeds it" %>
+        </button>
+      </div>
+
+      <div :if={@view == :graph and not @dead_end?}>
+        <.graph levels={@bands} status={@status} selected={@selected} plan={@plan} />
+        <p class="rdd-cap">
           <%= if @direction == :upstream, do: "what feeds", else: "what a change to" %>
           <code><%= @selected %></code>
           <%= if @direction == :upstream, do: "", else: "reaches" %> — convergence drawn once
         </p>
       </div>
 
-      <div :if={@view == :tree}>
-        <section :for={panel <- panels(assigns)} class="mb-6">
-          <div class="flex items-baseline gap-2 mb-1">
-            <h2 class="text-xs uppercase tracking-wide opacity-60 font-semibold">
-              <%= panel.title %>
-            </h2>
-
-            <code :if={panel.every} class="text-xs opacity-40 font-normal normal-case">
-              · every <%= panel.every %>
-            </code>
-
-            <button
-              :if={panel.scannable?}
-              class="btn btn-xs btn-ghost ml-auto"
-              phx-click="scan"
-              phx-value-cell={panel.cell}
-              phx-value-mode="default"
-            >
-              scan
-            </button>
-          </div>
-
-          <.hierarchy
-            rows={rows_for(assigns, panel.cell)}
-            status={@status}
-            selected={@selected}
-            plan={@plan}
-          />
-        </section>
+      <div :if={@view == :tree and not @dead_end? and @node}>
+        <.hierarchy node={@node} status={@status} selected={@selected} />
       </div>
 
       <.detail detail={@detail} />

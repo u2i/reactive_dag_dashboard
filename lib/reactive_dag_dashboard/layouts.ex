@@ -147,9 +147,54 @@ defmodule ReactiveDagDashboard.Layouts do
                        letter-spacing: .08em; text-transform: uppercase }
           .rdd-gbandline { stroke: currentColor; opacity: .1; stroke-width: 1 }
 
-          /* many routes in: the same stacked glyph the tree uses */
-          .rdd-many { box-shadow: 3px 3px 0 -1px currentColor, 5px 5px 0 -2px currentColor;
-                      opacity: .999 }
+          /* ── the expression tree ────────────────────────────────────────
+
+             A node is a bordered CARD, not an indented row: containment reads
+             as structure where a margin does not, and a subtree becomes a
+             visible region of the page. `currentColor` again throughout, for
+             the same reason the SVG uses it — daisyUI v5 tokens are OKLCH and
+             the v4 spelling silently resolves to black. */
+          /* The stacked-card glyph needs an OPAQUE ground between its layers,
+             or the four shadows composite into one smear. daisyUI v5 exposes
+             the base colour as a plain custom property holding a complete
+             colour value — used bare, never wrapped in hsl(), which is the v4
+             spelling that resolves to nothing. The fallback keeps the glyph
+             legible on a host that themes differently. */
+          .rdd-tree { --rdd-indent: 26px; --rdd-ground: var(--color-base-100, Canvas) }
+
+          .rdd-row {
+            display: flex; align-items: baseline; gap: .5rem;
+            position: relative; overflow: hidden;
+            padding: 7px 11px; margin-bottom: 4px;
+            border: 1px solid currentColor; border-color: color-mix(in oklab, currentColor 18%, transparent);
+            border-radius: 9px;
+            background: var(--rdd-panel, transparent);
+          }
+          .rdd-row:hover { border-color: color-mix(in oklab, currentColor 38%, transparent) }
+          .rdd-on { border-color: color-mix(in oklab, currentColor 65%, transparent);
+                    background: color-mix(in oklab, currentColor 7%, transparent) }
+
+          /* the kind spine: where data ENTERS, where it is COMBINED, where it
+             is merely carried. Three, because the library has three. */
+          .rdd-lead { position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+                      border-radius: 9px 0 0 9px }
+          .rdd-lead-source { background: color-mix(in oklab, currentColor 55%, transparent) }
+          .rdd-lead-join   { background: color-mix(in oklab, currentColor 40%, transparent) }
+          .rdd-lead-derive { background: color-mix(in oklab, currentColor 22%, transparent) }
+          .rdd-lead-plain  { background: color-mix(in oklab, currentColor 12%, transparent) }
+
+          /* a set, not a single row — the stacked-card glyph, matching the SVG.
+             Drawn with borders rather than a shadow so it reads on either
+             theme without a colour that only works on one ground. */
+          .rdd-many {
+            box-shadow:
+              3px 3px 0 0 var(--rdd-ground, transparent),
+              4px 4px 0 0 color-mix(in oklab, currentColor 18%, transparent),
+              6px 6px 0 0 var(--rdd-ground, transparent),
+              7px 7px 0 0 color-mix(in oklab, currentColor 18%, transparent);
+            margin-bottom: 12px;
+          }
+
           .rotate-90 { transform: rotate(90deg) }
         </style>
       </head>

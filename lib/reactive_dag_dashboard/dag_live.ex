@@ -273,6 +273,14 @@ defmodule ReactiveDagDashboard.DagLive do
   def render(assigns) do
     ~H"""
     <main class="p-6 max-w-5xl mx-auto">
+      <%!-- The component styles travel WITH the page, so a host that supplies
+            its own `root_layout:` — which the docs recommend, and which cascade
+            does — still gets the tree's cards and the graph's strokes. They
+            used to live only in this library's own layout, so overriding it
+            silently dropped them: the page kept its daisyUI classes and looked
+            styled, while the tree lost its structure and the SVG drew nothing. --%>
+      <.styles />
+
       <div class="flex items-baseline justify-between mb-4">
         <h1 class="text-xl font-semibold">reactive_dag</h1>
         <span class={["badge badge-sm", @live? && "badge-success" || "badge-ghost"]}>

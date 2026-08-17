@@ -42,7 +42,7 @@ defmodule ReactiveDagDashboard.DagLive do
      socket
      |> assign(:plan_mfa, session["plan_mfa"])
      |> assign(:base_path, "/")
-     |> assign(:selected, nil)
+     |> assign(:root, nil)
      |> assign(:direction, :downstream)
      |> assign(:message, nil)
      |> load()
@@ -58,7 +58,10 @@ defmodule ReactiveDagDashboard.DagLive do
      |> assign(:base_path, base_path(uri, params["cell_id"]))
      |> assign(:direction, dir)
      |> assign(:view, view(params))
-     |> assign(:selected, params["cell_id"] || default_cell(socket.assigns, dir))
+     # NOT defaulted. With no cell named the page shows the starting points for
+     # this direction and waits — picking one is the first act, rather than the
+     # page guessing a root and rendering a tree nobody asked for.
+     |> assign(:root, params["cell_id"])
      |> assign_view()}
   end
 
@@ -77,8 +80,17 @@ defmodule ReactiveDagDashboard.DagLive do
     {:noreply, push_patch(socket, to: path_for(socket.assigns, view: to))}
   end
 
+  # Changing direction CLEARS the root. The two directions start from different
+  # ends — sources downstream, outputs upstream — so a root chosen for one is
+  # usually a dead end in the other, and carrying it over answered a question
+  # nobody asked: you picked `expenses` to see what it reaches, hit upstream,
+  # and got "nothing feeds this". Direction is chosen first and the list of
+  # starting points follows from it.
   def handle_event("direction", %{"to" => to}, socket) do
-    {:noreply, push_patch(socket, to: path_for(socket.assigns, direction: to))}
+    # `base_path` keeps its trailing slash so `<base>cell/<id>` composes; strip
+    # it here, since `/ops/dag/?direction=…` is an odd URL to put in a bar.
+    root = String.replace_suffix(socket.assigns.base_path, "/", "")
+    {:noreply, push_patch(socket, to: "#{root}?direction=#{to}")}
   end
 
   def handle_event("scan", %{"cell" => cell_id} = params, socket) do
@@ -167,24 +179,27 @@ defmodule ReactiveDagDashboard.DagLive do
     |> assign(:pending, MapSet.new(Insights.pending(plan)))
   end
 
-  defp assign_view(%{assigns: %{selected: nil}} = socket) do
+  defp assign_view(%{assigns: %{root: nil}} = socket) do
     socket
-    |> assign(:groups, Tree.groups(socket.assigns.plan, socket.assigns.direction))
+    |> assign(:starts, Tree.starting_points(socket.assigns.plan, socket.assigns.direction))
+    |> assign(:details, %{})
     |> assign(:node, nil)
-    |> assign(:detail, nil)
     |> assign(:routes, 0)
     |> assign(:bands, [])
     |> assign(:dead_end?, false)
   end
 
-  defp assign_view(%{assigns: %{plan: plan, selected: id, direction: dir}} = socket) do
+  defp assign_view(%{assigns: %{plan: plan, root: id, direction: dir}} = socket) do
     tree = tree_for(plan, id, dir)
 
     socket
-    # The picker's own order depends on direction — the ends that matter for
-    # THIS question come first — so it is assigned here, where direction is
-    # known, rather than in `load/1`, which runs before `handle_params` sets it.
-    |> assign(:groups, Tree.groups(plan, dir))
+    # The starting points depend on direction, so they are assigned here where
+    # it is known rather than in `load/1`, which runs before `handle_params`.
+    |> assign(:starts, Tree.starting_points(plan, dir))
+    # Every node's detail, keyed by id — the tree renders it inline behind a
+    # disclosure rather than the page holding one "selected" node. A row that
+    # can show its own detail needs no selection to be the subject.
+    |> assign(:details, details_for(plan, tree, socket.assigns.controls))
     # NESTED, not flattened: the markup recurses so containment is real
     # structure rather than a computed margin. See Components.hierarchy/1.
     |> assign(:node, Tree.nested(plan, tree, dir))
@@ -193,11 +208,23 @@ defmodule ReactiveDagDashboard.DagLive do
     # levels drew every cell at once, which at real graph sizes is a tangle no
     # amount of styling rescues (u2i/reactive_dag_dashboard#28).
     |> assign(:bands, Tree.levels(plan, tree))
-    |> assign(:detail, NodeDetail.build(plan, id, socket.assigns.controls))
     # a source has nothing above it and an output nothing below: one direction
     # of each is a single node with no tree, which renders as an empty panel
     # and reads as broken unless the page says which way to look
+    # An ISOLATED cell — no inputs and no consumers — is both a source and an
+    # output, so it appears in either list and has a tree in neither. Rare, and
+    # the honest rendering is to say so rather than draw one lonely card.
     |> assign(:dead_end?, not Tree.has_tree?(plan, id, dir))
+  end
+
+  # One detail per node ON SCREEN, not for the whole plan: the tree is scoped,
+  # and building 33 of these to render 6 is work nobody sees.
+  defp details_for(plan, tree, controls) do
+    tree
+    |> Tree.flatten()
+    |> Enum.map(& &1.id)
+    |> Enum.uniq()
+    |> Map.new(&{&1, NodeDetail.build(plan, &1, controls)})
   end
 
   defp tree_for(plan, id, :upstream), do: Tree.upstream(plan, id)
@@ -211,14 +238,9 @@ defmodule ReactiveDagDashboard.DagLive do
   #
   # One tree, one root, either direction, chosen from a picker over every cell.
 
-  # With nothing named, start where a change enters — the question people
-  # arrive with is almost always "what happened to X", and X came from a source.
-  # Direction decides where to START. Upstream from a ROOT is one node with
-  # nothing above it — which is what "no hierarchy under upstream, each item a
-  # single entry" was: the default cell was always a root, so the upstream view
-  # could only ever show a leaf.
-  defp default_cell(%{plan: plan}, :upstream), do: plan |> Tree.sinks() |> List.first()
-  defp default_cell(%{plan: plan}, _downstream), do: plan |> Tree.roots() |> List.first()
+  # There is deliberately no default root. The page shows the starting points
+  # for the chosen direction and waits: guessing one rendered a tree nobody
+  # asked for, and made the first thing on screen an arbitrary cell.
 
   defp direction(%{"direction" => "upstream"}), do: :upstream
   defp direction(_), do: :downstream
@@ -232,7 +254,7 @@ defmodule ReactiveDagDashboard.DagLive do
   # One place that builds a link, so a cell change cannot drop the direction and
   # a direction change cannot drop the cell.
   defp path_for(assigns, overrides) do
-    cell = Keyword.get(overrides, :cell, assigns.selected)
+    cell = Keyword.get(overrides, :cell, assigns.root)
     dir = Keyword.get(overrides, :direction, to_string(assigns.direction))
     view = Keyword.get(overrides, :view, to_string(assigns.view))
 
@@ -277,64 +299,56 @@ defmodule ReactiveDagDashboard.DagLive do
 
       <div :if={@message} class="rdd-alert"><%= @message %></div>
 
-      <nav class="rdd-tabs">
-        <button class={["rdd-tab", @view == :tree && "on"]} phx-click="view" phx-value-to="tree">
-          expression
+      <%!-- DIRECTION FIRST. It is the question being asked, and it decides
+            which cells can even be a starting point: downstream begins where
+            data enters, upstream at the table you are looking at. Choosing a
+            node first and then flipping direction asked the page something
+            about a cell that was usually a dead end in the other direction. --%>
+      <div class="rdd-ask">
+        <button
+          class={["rdd-askbtn", @direction == :downstream && "on"]}
+          phx-click="direction"
+          phx-value-to="downstream"
+        >
+          <span class="rdd-askq">what a change breaks</span>
+          <span class="rdd-askn">from a source, downstream</span>
         </button>
-        <button class={["rdd-tab", @view == :graph && "on"]} phx-click="view" phx-value-to="graph">
-          graph
+        <button
+          class={["rdd-askbtn", @direction == :upstream && "on"]}
+          phx-click="direction"
+          phx-value-to="upstream"
+        >
+          <span class="rdd-askq">where this came from</span>
+          <span class="rdd-askn">from an output, upstream</span>
         </button>
-      </nav>
+      </div>
 
-      <%!-- The picker. Downstream used to render one panel per source and
-            upstream a single panel rooted at the selection, so switching
-            targets was a different gesture in each direction — and upstream had
-            none at all: clicking a node silently re-rooted the whole page.
-            Half a real graph is neither source nor sink, and none of it could
-            be a starting point. --%>
-      <div class="rdd-bar">
-        <span class="rdd-bar-lab">rooted at</span>
+      <%!-- The starting points for THAT question — sources downstream, outputs
+            upstream. One list, no taxonomy: a derived cell is not somewhere you
+            begin, and the opposite end is a dead end offered as a choice. The
+            middle of the graph is reached by clicking a name in the tree. --%>
+      <div class="rdd-starts">
+        <button
+          :for={id <- @starts}
+          class={["rdd-start", id == @root && "on"]}
+          phx-click="select"
+          phx-value-cell={id}
+        >
+          <%= id %>
+        </button>
+      </div>
 
-        <div class="rdd-picker">
-          <button class="rdd-pick" phx-click={JS.toggle(to: "#rdd-menu")}>
-            <%= @selected || "—" %> <span class="rdd-caret">▾</span>
+      <div :if={@root} class="rdd-bar">
+        <nav class="rdd-tabs">
+          <button class={["rdd-tab", @view == :tree && "on"]} phx-click="view" phx-value-to="tree">
+            expression
           </button>
-
-          <div id="rdd-menu" class="rdd-menu hidden" phx-click-away={JS.hide(to: "#rdd-menu")}>
-            <div :for={{label, ids} <- @groups} class="rdd-menu-group">
-              <div class="rdd-menu-head"><%= label %> <span><%= length(ids) %></span></div>
-              <button
-                :for={id <- ids}
-                class={["rdd-menu-item", id == @selected && "on"]}
-                phx-click={JS.hide(to: "#rdd-menu") |> JS.push("select")}
-                phx-value-cell={id}
-              >
-                <%= id %>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div class="rdd-seg">
-          <button
-            class={["rdd-segbtn", @direction == :downstream && "on"]}
-            phx-click="direction"
-            phx-value-to="downstream"
-            title="what a change to this reaches"
-          >
-            downstream
+          <button class={["rdd-tab", @view == :graph && "on"]} phx-click="view" phx-value-to="graph">
+            graph
           </button>
-          <button
-            class={["rdd-segbtn", @direction == :upstream && "on"]}
-            phx-click="direction"
-            phx-value-to="upstream"
-            title="what feeds this"
-          >
-            upstream
-          </button>
-        </div>
+        </nav>
 
-        <span :if={@view == :tree and not @dead_end?} class="rdd-bar-acts">
+        <span :if={@view == :tree} class="rdd-bar-acts">
           <button
             type="button"
             class="rdd-btn rdd-ghost"
@@ -357,44 +371,32 @@ defmodule ReactiveDagDashboard.DagLive do
           </button>
         </span>
 
-        <span :if={not @dead_end?} class="rdd-routes">
+        <span class="rdd-routes">
           <%= @routes %> route<%= if @routes == 1, do: "", else: "s" %>
         </span>
       </div>
 
-      <%!-- A source has nothing above it and an output nothing below. That is
-            an answer, not an error, but an empty panel reads as broken — so say
-            it, and offer the direction that does have something. --%>
-      <div :if={@dead_end?} class="rdd-empty">
-        <p>
-          <strong><%= @selected %></strong>
-          <%= if @direction == :upstream,
-            do: "is a source — nothing in this graph feeds it.",
-            else: "is an output — nothing in this graph reads it." %>
-        </p>
-        <button
-          class="rdd-btn"
-          phx-click="direction"
-          phx-value-to={if @direction == :upstream, do: "downstream", else: "upstream"}
-        >
-          <%= if @direction == :upstream, do: "see what it reaches →", else: "← see what feeds it" %>
-        </button>
+      <p :if={is_nil(@root)} class="rdd-prompt">
+        Pick <%= if @direction == :upstream, do: "an output", else: "a source" %> above.
+      </p>
+
+      <%!-- An isolated cell is in both lists and has a tree in neither. --%>
+      <div :if={@root && @dead_end?} class="rdd-empty">
+        <p><strong><%= @root %></strong> is not connected to anything in this graph.</p>
       </div>
 
-      <div :if={@view == :graph and not @dead_end?}>
-        <.graph levels={@bands} status={@status} selected={@selected} plan={@plan} />
+      <div :if={@root && @view == :graph && not @dead_end?}>
+        <.graph levels={@bands} status={@status} selected={@root} plan={@plan} />
         <p class="rdd-cap">
           <%= if @direction == :upstream, do: "what feeds", else: "what a change to" %>
-          <code><%= @selected %></code>
+          <code><%= @root %></code>
           <%= if @direction == :upstream, do: "", else: "reaches" %> — convergence drawn once
         </p>
       </div>
 
-      <div :if={@view == :tree and not @dead_end? and @node}>
-        <.hierarchy node={@node} status={@status} selected={@selected} />
+      <div :if={@root && @view == :tree && @node && not @dead_end?}>
+        <.hierarchy node={@node} status={@status} details={@details} />
       </div>
-
-      <.detail detail={@detail} />
     </main>
     """
   end

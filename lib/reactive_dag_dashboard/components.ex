@@ -141,6 +141,39 @@ defmodule ReactiveDagDashboard.Components do
       .rdd-tab:hover { color: var(--dim) }
       .rdd-tab.on { color: var(--bg); background: var(--accent); border-color: var(--accent) }
 
+      /* ── the question, then its starting points ──────────────────────
+         Direction is chosen FIRST and as a question in words, because that is
+         what someone arrives with. "downstream" is the graph's word for it,
+         not theirs. */
+      .rdd-ask { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap }
+      .rdd-askbtn { display: flex; flex-direction: column; gap: 2px; text-align: left;
+                    font: inherit; background: var(--panel); color: var(--dim);
+                    border: 1px solid var(--border); border-radius: 9px;
+                    padding: 9px 14px; cursor: pointer; min-width: 210px }
+      .rdd-askbtn:hover { border-color: #3a4655 }
+      .rdd-askbtn.on { border-color: var(--accent); background: var(--panel2) }
+      .rdd-askq { font-size: 13px; font-weight: 650; color: var(--ink) }
+      .rdd-askbtn.on .rdd-askq { color: var(--accent) }
+      .rdd-askn { font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em;
+                  color: var(--faint); font-family: ui-monospace, monospace }
+
+      .rdd-starts { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px;
+                    max-width: 1080px }
+      .rdd-start { font: inherit; font-family: ui-monospace, monospace; font-size: 11.5px;
+                   color: var(--dim); background: var(--panel);
+                   border: 1px solid var(--border); border-radius: 100px;
+                   padding: 4px 12px; cursor: pointer }
+      .rdd-start:hover { border-color: var(--measured); color: var(--measured) }
+      .rdd-start.on { background: var(--measured); border-color: var(--measured);
+                      color: var(--bg); font-weight: 700 }
+
+      .rdd-prompt { font-size: 12.5px; color: var(--faint); margin: 0 }
+
+      /* a row's own detail, opened in place — no page-level "selected" node */
+      .rdd-drawer { margin: 0 0 6px var(--indent); padding-left: 16px;
+                    border-left: 1px dashed #283341 }
+      .rdd-drawer .rdd-card { margin-top: 0 }
+
       /* ── the picker ────────────────────────────────────────────────── */
       .rdd-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
                  margin-bottom: 16px; max-width: 1080px }
@@ -346,7 +379,7 @@ defmodule ReactiveDagDashboard.Components do
 
   attr(:node, :map, required: true)
   attr(:status, :map, required: true)
-  attr(:selected, :string, default: nil)
+  attr(:details, :map, required: true)
 
   @doc """
   The hierarchy: what a change reaches, as an EXPRESSION.
@@ -390,14 +423,14 @@ defmodule ReactiveDagDashboard.Components do
   def hierarchy(assigns) do
     ~H"""
     <div class="rdd-tree">
-      <.tree_node node={@node} status={@status} selected={@selected} />
+      <.tree_node node={@node} status={@status} details={@details} />
     </div>
     """
   end
 
   attr(:node, :map, required: true)
   attr(:status, :map, required: true)
-  attr(:selected, :string, default: nil)
+  attr(:details, :map, required: true)
 
   defp tree_node(assigns) do
     ~H"""
@@ -407,16 +440,14 @@ defmodule ReactiveDagDashboard.Components do
       @node.routes > 1 && "rdd-many",
       @node.closed? && "rdd-closed"
     ]}>
-      <div
-        class={["rdd-row", @node.id == @selected && "rdd-on"]}
-        phx-click={@node.children > 0 && toggle_kids(@node)}
-      >
+      <div class="rdd-row">
         <span class="rdd-lead"></span>
 
         <span
           :if={@node.children > 0}
           id={"chev-#{@node.path}"}
           class={["rdd-chev", not @node.closed? && "rotate-90"]}
+          phx-click={toggle_kids(@node)}
         >
           ▸
         </span>
@@ -445,8 +476,13 @@ defmodule ReactiveDagDashboard.Components do
             </span>
           </div>
 
+          <%!-- The name opens THIS row's detail, in place. It used to select
+                the node, which re-rendered one panel at the foot of the page
+                for whichever row you last clicked — so the answer to "what is
+                this" appeared a scroll away from the thing you asked about,
+                and asking about a second row replaced the first. --%>
           <div class="rdd-name">
-            <button type="button" phx-click="select" phx-value-cell={@node.id}>
+            <button type="button" phx-click={toggle_detail(@node)}>
               <%= @node.id %>
             </button>
           </div>
@@ -457,16 +493,25 @@ defmodule ReactiveDagDashboard.Components do
         </span>
       </div>
 
+      <div id={"det-#{@node.path}"} class="rdd-drawer hidden">
+        <.detail detail={@details[@node.id]} />
+      </div>
+
       <div
         :if={@node.children > 0}
         id={"kids-#{@node.path}"}
         class={["rdd-children", @node.closed? && "hidden"]}
       >
-        <.tree_node :for={kid <- @node.kids} node={kid} status={@status} selected={@selected} />
+        <.tree_node :for={kid <- @node.kids} node={kid} status={@status} details={@details} />
       </div>
     </div>
     """
   end
+
+  # Open this row's detail. Per PATH, not per cell: a converging node is drawn
+  # under every route that reaches it, and opening one occurrence must not open
+  # the others.
+  defp toggle_detail(node), do: JS.toggle(to: "#det-#{node.path}")
 
   # The spine's colour says what KIND of node this is before the label is read:
   # where data ENTERS the graph, where it is COMBINED, and where it is merely

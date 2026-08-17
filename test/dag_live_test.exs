@@ -60,7 +60,17 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     end
   end
 
-  # Just the diagram. The picker lists every cell in the plan, so a question
+  # Just the starting-point strip. Cell ids appear all over the page — in the
+  # tree, in the drawers, in the diagram — so a question about what is OFFERED
+  # has to be asked of the offer.
+  defp starts_of(html) do
+    case Regex.run(~r/<div class="rdd-starts">(.*?)<\/div>\s*<[pd]/s, html) do
+      [_, strip] -> strip
+      nil -> ""
+    end
+  end
+
+  # Just the diagram. Cell ids appear elsewhere on the page, so a question
   # about what the DIAGRAM contains has to be asked of the diagram.
   defp svg_of(html) do
     case Regex.run(~r/<svg.*?<\/svg>/s, html) do
@@ -68,106 +78,130 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       nil -> ""
     end
   end
-
-  describe "the picker — choosing what the tree is rooted at" do
-    # The page used to render one panel per SOURCE downstream and a single
-    # panel rooted at the selection upstream. Two different gestures for one
-    # question, and upstream had no picker at all: clicking a node silently
-    # re-rooted the page, so the node you clicked vanished into the root
-    # position and its siblings disappeared.
+  describe "the question comes first, then its starting points" do
+    # The page used to name a root and offer a direction toggle beside it, over
+    # a picker listing every cell grouped sources / derived / outputs. Three
+    # problems, all the same shape — the control described the DATA STRUCTURE
+    # rather than the work:
     #
-    # One picker over every cell, both directions.
+    #   * `derived` is not somewhere you begin, it is somewhere you arrive;
+    #   * the far end is a guaranteed dead end offered as a choice;
+    #   * a root chosen for one direction is usually a dead end in the other,
+    #     and flipping direction kept it.
 
-    test "offers EVERY cell, not just the two ends" do
-      # the reason this exists: half of a real graph is neither source nor
-      # sink, and none of it could be a starting point. "What feeds
-      # meeting_shell" was unanswerable from the page.
+    test "direction is asked as a question, before anything is chosen" do
       {:ok, _view, html} = at(@path)
 
-      assert html =~ ~s|phx-value-cell="expenses"|, "a source"
-      assert html =~ ~s|phx-value-cell="category_health"|, "a derived cell"
-      assert html =~ ~s|phx-value-cell="verdict_audit"|, "an output"
+      assert html =~ "what a change breaks"
+      assert html =~ "where this came from"
     end
 
-    test "grouped by position, since that is what the three kinds mean" do
+    test "with nothing chosen the page waits rather than guessing a root" do
+      # it used to default to whichever cell sorted first, so the first thing
+      # on screen was an arbitrary tree
       {:ok, _view, html} = at(@path)
 
-      assert html =~ "sources"
-      assert html =~ "derived"
-      assert html =~ "outputs"
+      assert html =~ "rdd-prompt"
+      assert html =~ "Pick a source"
+      refute markup(html) =~ "rdd-row", "no tree until one is chosen"
     end
 
-    test "the current root is named on the control" do
-      {:ok, _view, html} = at("#{@path}/cell/category_health")
+    test "downstream offers the SOURCES, and nothing else" do
+      {:ok, _view, html} = at(@path)
+      starts = starts_of(html)
 
-      assert html =~ "rdd-pick"
-      assert html =~ "category_health"
+      assert starts =~ ~s|phx-value-cell="expenses"|, "a source"
+      assert starts =~ ~s|phx-value-cell="council_portal"|, "a source"
+
+      refute starts =~ ~s|phx-value-cell="category_health"|, "derived is not a start"
+      refute starts =~ ~s|phx-value-cell="verdict_audit"|, "an output is a dead end here"
     end
 
-    test "picking a cell re-roots the tree" do
+    test "upstream offers the OUTPUTS, and nothing else" do
+      {:ok, _view, html} = at("#{@path}?direction=upstream")
+      starts = starts_of(html)
+
+      assert starts =~ ~s|phx-value-cell="verdict_audit"|, "an output"
+
+      refute starts =~ ~s|phx-value-cell="expenses"|, "a source is a dead end here"
+      refute starts =~ ~s|phx-value-cell="category_health"|, "derived is not a start"
+    end
+
+    test "no group headings at all — one list, not a taxonomy" do
+      {:ok, _view, html} = at(@path)
+
+      refute markup(html) =~ "derived"
+    end
+
+    test "picking a start roots the tree there" do
       {:ok, view, _} = at(@path)
 
-      render_click(view, "select", %{"cell" => "category_health"})
+      render_click(view, "select", %{"cell" => "expenses"})
 
-      assert_patched(view, "#{@path}/cell/category_health")
-    end
-
-    test "the ends that matter for THIS direction come first" do
-      # downstream starts at a source, upstream at an output. Leading with the
-      # wrong end puts the natural starting points a scroll away.
-      {:ok, _view, down} = at(@path)
-      {:ok, _view, up} = at("#{@path}/cell/verdict_audit?direction=upstream")
-
-      assert index_of(down, "sources") < index_of(down, "outputs")
-      assert index_of(up, "outputs") < index_of(up, "sources")
-    end
-
-    test "the same picker serves both directions" do
-      # the asymmetry that made clicking feel destructive: downstream had seven
-      # source panels as its index and upstream had none
-      {:ok, _view, html} = at("#{@path}/cell/verdict_audit?direction=upstream")
-
-      assert html =~ "rdd-pick"
-      assert html =~ ~s|phx-value-cell="expenses"|
-    end
-  end
-
-  describe "a dead end says so" do
-    test "a source viewed upstream explains itself rather than rendering empty" do
-      # `expenses` has no inputs, so upstream from it is one node with nothing
-      # above it. That is an answer, not an error — but an empty panel reads as
-      # broken, which is what was reported.
-      {:ok, _view, html} = at("#{@path}/cell/expenses?direction=upstream")
-
-      assert html =~ "rdd-empty"
-      assert html =~ "is a source"
-      assert html =~ "nothing in this graph feeds it"
-    end
-
-    test "and offers the direction that does have something" do
-      {:ok, view, html} = at("#{@path}/cell/expenses?direction=upstream")
-
-      assert html =~ "see what it reaches"
-
-      render_click(view, "direction", %{"to" => "downstream"})
       assert_patched(view, "#{@path}/cell/expenses")
     end
 
-    test "an output viewed downstream likewise" do
-      {:ok, _view, html} = at("#{@path}/cell/verdict_audit")
+    test "changing direction CLEARS the root" do
+      # the sticky-selection bug: you picked `expenses` to see what it reaches,
+      # hit upstream, and got "nothing feeds this" — an answer to a question
+      # nobody asked. The two directions start from different ends.
+      {:ok, view, _} = at("#{@path}/cell/expenses")
 
-      assert html =~ "rdd-empty"
-      assert html =~ "is an output"
+      render_click(view, "direction", %{"to" => "upstream"})
+
+      assert_patched(view, "#{@path}?direction=upstream")
     end
 
-    test "a cell with a tree in that direction is NOT a dead end" do
-      {:ok, _view, html} = at("#{@path}/cell/expenses")
+    test "and the starting points change with it" do
+      {:ok, view, _} = at("#{@path}/cell/expenses")
 
-      refute markup(html) =~ "rdd-empty"
-      assert html =~ "rdd-row"
+      html = render_click(view, "direction", %{"to" => "upstream"})
+
+      assert starts_of(html) =~ ~s|phx-value-cell="verdict_audit"|
+      refute starts_of(html) =~ ~s|phx-value-cell="expenses"|
     end
   end
 
+  describe "a row shows its own detail, in place" do
+    test "every row carries a drawer, not one panel for the page" do
+      # the detail used to render once at the foot of the page for whichever
+      # row was last selected — so the answer appeared a scroll away from the
+      # thing you asked about, and asking about a second row replaced the first
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      drawers = Regex.scan(~r/id="det-[^"]+"/, html) |> length()
+
+      assert drawers > 1, "one per row, not one per page"
+    end
+
+    test "the drawer is keyed by PATH, so one occurrence opens alone" do
+      # a converging node is drawn under every route that reaches it
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      ids = Regex.scan(~r/id="(det-[^"]+)"/, html, capture: :all_but_first) |> List.flatten()
+
+      assert length(ids) == length(Enum.uniq(ids)), "no duplicate DOM ids"
+    end
+
+    test "opening one is client-side, with no server round-trip" do
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      # `select` still exists — on the starting-point CHIPS, which is what it
+      # is for. What is gone is a row selecting itself: no tree row pushes it.
+      tree = markup(html) |> String.split(~s|<div class="rdd-tree">|) |> List.last()
+
+      refute tree =~ ~s|phx-click="select"|, "no row selects anything"
+      assert tree =~ "det-", "it opens its own drawer instead"
+    end
+
+    test "the drawer carries what the node panel carried" do
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      assert html =~ "rdd-card"
+      assert html =~ "quick scan", "its scanner controls"
+      assert html =~ "reprocess", "and its slice controls"
+    end
+  end
   describe "the hierarchy" do
     test "structure is drawn by indent and a collapse chevron" do
       # depth is CONTAINMENT, not a computed margin: a node's children live in
@@ -201,7 +235,10 @@ defmodule ReactiveDagDashboard.DagLiveTest do
 
       html = render_click(view, "direction", %{"to" => "upstream"})
 
-      assert html =~ "category_health", "what feeds all_verdicts"
+      # it is a patch, not a navigation — and it lands on the upstream question
+      # with its own starting points, rather than re-rooting at all_verdicts
+      assert html =~ "where this came from"
+      assert starts_of(html) =~ ~s|phx-value-cell="verdict_audit"|
     end
   end
 
@@ -210,7 +247,10 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       Application.put_env(:reactive_dag_dashboard, :source_url, "https://ex.com/%{path}#L%{line}")
       on_exit(fn -> Application.put_env(:reactive_dag_dashboard, :source_url, nil) end)
 
-      {:ok, _view, html} = at("#{@path}/cell/published")
+      # UPSTREAM: `published` is a sink, so it is a starting point for "where
+      # did this come from" and a dead end for "what does it break". Its
+      # detail rides in its own row's drawer, so the tree has to exist.
+      {:ok, _view, html} = at("#{@path}/cell/published?direction=upstream")
 
       # `Published` is a compute node; its module's first paragraph is the
       # description, and the link goes to the line
@@ -250,7 +290,7 @@ defmodule ReactiveDagDashboard.DagLiveTest do
 
   describe "key counts say WHY they are what they are" do
     test "a real table reports its count" do
-      {:ok, _view, html} = at(@path)
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
 
       assert html =~ ~s|title="2 keys"|
     end
@@ -273,7 +313,7 @@ defmodule ReactiveDagDashboard.DagLiveTest do
   end
 
   test "selecting a cell moves to it" do
-    {:ok, view, _} = at(@path)
+    {:ok, view, _} = at("#{@path}/cell/expenses")
 
     render_click(view, "select", %{"cell" => "category_health"})
 
@@ -282,7 +322,7 @@ defmodule ReactiveDagDashboard.DagLiveTest do
 
   describe "the graph view — the shape a tree cannot show" do
     test "draws a node per cell and an edge per input" do
-      {:ok, _view, html} = at("#{@path}?view=graph")
+      {:ok, _view, html} = at("#{@path}/cell/expenses?view=graph")
 
       assert html =~ "<svg"
       assert html =~ "rdd-gbox"
@@ -292,7 +332,7 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     test "columns come from the graph's own depth, not a layout pass" do
       # `Insights.levels/1` is longest-path-from-a-leaf, which IS the layered
       # assignment — so there is no layout algorithm to get wrong
-      {:ok, _view, html} = at("#{@path}?view=graph")
+      {:ok, _view, html} = at("#{@path}/cell/expenses?view=graph")
 
       # depth 0 at the left pad, depth 1 one column over
       assert html =~ ~s|x="16"|
@@ -302,7 +342,7 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     test "an operation is a DIAMOND between the boxes, not an implied arrow" do
       # four inputs meeting at a MeetingJoin is a join; drawing it as four
       # arrows into a box says only that they arrive
-      {:ok, _view, html} = at("#{@path}?view=graph")
+      {:ok, _view, html} = at("#{@path}/cell/expenses?view=graph")
 
       assert html =~ "rdd-gop"
       assert html =~ "rotate(45"
@@ -349,7 +389,7 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     end
 
     test "a leaf has no diamond — nothing derives it" do
-      {:ok, _view, html} = at("#{@path}?view=graph")
+      {:ok, _view, html} = at("#{@path}/cell/expenses?view=graph")
 
       diamonds = Regex.scan(~r/rdd-gop\b/, html) |> length()
       boxes = Regex.scan(~r/rdd-gbox\b/, html) |> length()
@@ -360,13 +400,13 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     test "a converging node is drawn as a stacked card" do
       # `all_verdicts` is read by two nodes; the stack is the same glyph the
       # tree uses for a cell reached by several routes
-      {:ok, _view, html} = at("#{@path}?view=graph")
+      {:ok, _view, html} = at("#{@path}/cell/expenses?view=graph")
 
       assert html =~ "rdd-gstack"
     end
 
     test "nodes are selectable from the diagram" do
-      {:ok, view, _} = at("#{@path}?view=graph")
+      {:ok, view, _} = at("#{@path}/cell/expenses?view=graph")
 
       render_click(view, "select", %{"cell" => "category_health"})
 
@@ -382,7 +422,7 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     end
 
     test "and the tree is still the default" do
-      {:ok, _view, html} = at(@path)
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
 
       refute html =~ "<svg"
     end
@@ -390,7 +430,7 @@ defmodule ReactiveDagDashboard.DagLiveTest do
 
   describe "collapse — a 7-deep graph is unreadable expanded" do
     test "rows below depth 1 start hidden" do
-      {:ok, _view, html} = at(@path)
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
 
       # From `expenses`, which is 4 deep. The default root reaches only 2
       # levels, so nothing under it is deep enough to start collapsed — the old
@@ -413,7 +453,7 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     end
 
     test "expand and collapse are client-side, with no server round-trip" do
-      {:ok, _view, html} = at(@path)
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
 
       assert html =~ "expand all"
       assert html =~ "remove_class"
@@ -436,7 +476,7 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       #
       # Asserted on the MARKUP: `render_click` sends the event whether or not
       # anything on the page emits it, so it would pass against the bug.
-      {:ok, _view, html} = at(@path)
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
 
       row = table_of(html)
 
@@ -459,7 +499,7 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       #
       # Asserted on the DETAIL heading: `expenses` also appears in the sources
       # table whatever is selected, so matching the whole page proves nothing.
-      {:ok, _view, html} = at("#{@path}?direction=upstream")
+      {:ok, _view, html} = at("#{@path}/cell/verdict_audit?direction=upstream")
 
       # asserted on the PROPERTY, not on which sink sorts first: whatever is
       # picked must have something above it, which a root never does — so a
@@ -493,7 +533,7 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     end
 
     test "downstream still starts at a root" do
-      {:ok, _view, html} = at(@path)
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
 
       # the default root is a source, and it has a tree rather than a dead end
       assert html =~ "rdd-row"
@@ -502,12 +542,14 @@ defmodule ReactiveDagDashboard.DagLiveTest do
   end
 
   describe "direction survives navigation" do
-    test "the toggle puts direction in the URL" do
+    test "the toggle puts direction in the URL, and drops the root with it" do
+      # the root is NOT carried over: the two directions start from different
+      # ends, so a cell chosen for one is usually a dead end in the other
       {:ok, view, _} = at("#{@path}/cell/all_verdicts")
 
       render_click(view, "direction", %{"to" => "upstream"})
 
-      assert_patched(view, "#{@path}/cell/all_verdicts?direction=upstream")
+      assert_patched(view, "#{@path}?direction=upstream")
     end
 
     test "and selecting a node KEEPS it" do

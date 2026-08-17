@@ -148,45 +148,27 @@ defmodule ReactiveDagDashboard.Tree do
   end
 
   @doc """
-  Every cell, grouped as `[{label, [id]}]` — what a picker offers.
+  Where a tree can START, for the question being asked.
 
-  Three groups, because a graph has three kinds of position and they answer
-  different questions: where data ENTERS (a source, nothing feeds it), where it
-  LANDS (an output, nothing reads it), and everything between.
+  Downstream that is the SOURCES — "a change lands here, what breaks" enters
+  where data enters. Upstream it is the OUTPUTS — "this table is wrong, where
+  did it come from" starts at the table you are looking at.
 
-  That middle group is why this exists rather than a list of roots and sinks.
-  In a real graph it is the largest — a 33-cell plan here has 7 sources, 10
-  outputs and **16 derived** — and a picker built only from the two ends cannot
-  root the tree at any of them. "What feeds `meeting_shell`" was unanswerable
-  from the page, and it is an ordinary question.
+  One list, not a taxonomy. An earlier version offered every cell grouped
+  sources / derived / outputs, on the reasoning that a picker limited to the
+  two ends could not root the tree at the middle of the graph. That was
+  answering a question about the DATA STRUCTURE rather than about the work: a
+  derived cell is not somewhere you begin, it is somewhere you arrive, and the
+  end you cannot travel from is a dead end offered as a choice.
 
-  Empty groups are dropped, so a graph with no convergence does not render an
-  empty heading.
+  The middle of the graph is still reachable — by clicking a name in the tree,
+  which is how you get there when you have a reason to.
   """
-  @spec groups(Plan.t(), :upstream | :downstream) :: [{String.t(), [String.t()]}]
-  def groups(plan, direction \\ :downstream)
+  @spec starting_points(Plan.t(), :upstream | :downstream) :: [String.t()]
+  def starting_points(plan, direction \\ :downstream)
 
-  def groups(%Plan{cells: cells} = plan, direction) do
-    roots = roots(plan)
-    sinks = sinks(plan)
-
-    derived =
-      cells
-      |> Map.keys()
-      |> Enum.reject(&(&1 in roots or &1 in sinks))
-      |> Enum.sort()
-
-    # The ends that MATTER for this direction come first, because they are what
-    # someone arrives wanting. Downstream the question is "a change lands here,
-    # what breaks" and it starts at a source; upstream it is "this table is
-    # wrong, where did it come from" and it starts at an output. Leading with
-    # the wrong end makes the natural starting points a scroll away.
-    case direction do
-      :upstream -> [{"outputs", sinks}, {"derived", derived}, {"sources", roots}]
-      _ -> [{"sources", roots}, {"derived", derived}, {"outputs", sinks}]
-    end
-    |> Enum.reject(fn {_label, ids} -> ids == [] end)
-  end
+  def starting_points(%Plan{} = plan, :upstream), do: sinks(plan)
+  def starting_points(%Plan{} = plan, _downstream), do: roots(plan)
 
   @doc """
   Whether `id` has anything to show in `direction` — false at a dead end.

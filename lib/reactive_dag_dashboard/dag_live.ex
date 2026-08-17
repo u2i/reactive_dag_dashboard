@@ -144,8 +144,15 @@ defmodule ReactiveDagDashboard.DagLive do
   # ── live updates ────────────────────────────────────────────────────────────
 
   @impl true
-  def handle_info({:drain_step, cell_id, _changed}, socket) do
-    {:noreply, socket |> LiveUpdates.seen_event() |> LiveUpdates.mark_stale(cell_id)}
+  # `changed` was discarded here. It is the number the trail shows — "ran, 12
+  # changed" is the difference between a cell that did work and one the drain
+  # merely visited and found settled.
+  def handle_info({:drain_step, cell_id, changed}, socket) do
+    {:noreply,
+     socket
+     |> LiveUpdates.seen_event()
+     |> LiveUpdates.record_step(cell_id, length(List.wrap(changed)))
+     |> LiveUpdates.mark_stale(cell_id)}
   end
 
   def handle_info(:flush_stale, socket) do
@@ -153,12 +160,15 @@ defmodule ReactiveDagDashboard.DagLive do
   end
 
   def handle_info({:drain_done, _report}, socket) do
-    {:noreply, socket |> LiveUpdates.seen_event() |> load() |> assign_view()}
+    {:noreply,
+     socket |> LiveUpdates.seen_event() |> LiveUpdates.finish() |> load() |> assign_view()}
   end
 
   def handle_info({:drain_failed, _reason}, socket) do
-    {:noreply, LiveUpdates.seen_event(socket)}
+    {:noreply, socket |> LiveUpdates.seen_event() |> LiveUpdates.finish()}
   end
+
+  def handle_info(:clear_trail, socket), do: {:noreply, LiveUpdates.clear_trail(socket)}
 
   def handle_info(:refresh, socket), do: {:noreply, socket |> load() |> assign_view()}
 
@@ -371,7 +381,7 @@ defmodule ReactiveDagDashboard.DagLive do
       </div>
 
       <div :if={@root && @view == :tree && @node && not @dead_end?}>
-        <.hierarchy node={@node} status={@status} details={@details} />
+        <.hierarchy node={@node} status={@status} details={@details} activity={@activity} />
       </div>
     </main>
     """

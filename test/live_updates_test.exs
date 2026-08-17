@@ -227,6 +227,88 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     |> Ash.create!()
   end
 
+  # The stylesheet is inline on the page, so it names every class whether or not
+  # anything renders with it — `refute html =~ "rdd-ran-badge"` matches the RULE.
+  defp body(html), do: String.replace(html, ~r/<style>.*?<\/style>/s, "")
+
+  describe "watching the cascade" do
+    test "a row that ran shows it, with the keys it changed" do
+      # driven by a real drain: the wave is the sequence of `:drain_step`s, and
+      # a row carrying a trail is one that has had its step
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+      edit_travel_to(999.0)
+      Frontier.mark_dirty("expenses", ["*"], "edit")
+      _ = drain()
+
+      assert render_eventually(view, "rdd-ran-badge")
+      assert body(render(view)) =~ "changed"
+    end
+
+    test "the trail names the cell that moved, not the whole graph" do
+      # the property the whole design rests on — a notification meaning
+      # "something somewhere changed" would cost the full re-read polling did
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+      edit_travel_to(1234.0)
+      Frontier.mark_dirty("expenses", ["*"], "edit")
+      _ = drain()
+
+      assert render_eventually(view, "rdd-ran")
+
+      html = body(render(view))
+      ran = Regex.scan(~r/class="rdd-row rdd-ran"/, html) |> length()
+      rows = Regex.scan(~r/class="rdd-row/, html) |> length()
+
+      assert ran > 0, "something ran"
+      assert ran < rows, "but not every row — only what the drain touched"
+    end
+
+    test "the trail OUTLIVES the drain, since that is when you read it" do
+      # clearing at :stop would erase the answer at the moment it became useful
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+      edit_travel_to(555.0)
+      Frontier.mark_dirty("expenses", ["*"], "edit")
+      _ = drain()
+
+      assert render_eventually(view, "rdd-ran-badge")
+
+      # the drain is over by now; the trail is still there
+      Process.sleep(100)
+      assert body(render(view)) =~ "rdd-ran-badge"
+    end
+
+    test "and clears when asked, so the page settles on its own" do
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+      edit_travel_to(777.0)
+      Frontier.mark_dirty("expenses", ["*"], "edit")
+      _ = drain()
+      assert render_eventually(view, "rdd-ran-badge")
+
+      send(view.pid, :clear_trail)
+
+      refute body(render(view)) =~ "rdd-ran-badge"
+    end
+
+    test "a page with no observer attached shows no trail at all" do
+      # no telemetry handler, so no steps — and the tree must not invent one
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+      edit_travel_to(42.0)
+      Frontier.mark_dirty("expenses", ["*"], "edit")
+      _ = drain()
+
+      Process.sleep(120)
+      refute body(render(view)) =~ "rdd-ran-badge"
+    end
+  end
+
   # the flush is deliberately debounced, so a render assertion has to wait for it
   defp render_eventually(view, needle, attempts \\ 20) do
     cond do

@@ -1015,11 +1015,19 @@ defmodule ReactiveDagDashboard.Components do
 
   defp model_label(model), do: to_string(model)
 
-  # Thousands, because a real drain spends tens of thousands and the exact digit
-  # is never the question — "11.9k" answers "was this expensive" at a glance
-  # where "11902" has to be read.
-  defp tok(n) when n >= 1000, do: "#{Float.round(n / 1000, 1)}k"
-  defp tok(n), do: to_string(n)
+  @doc """
+  A token count, in thousands past 1000.
+
+  A real drain spends tens of thousands and the exact digit is never the
+  question — "11.9k" answers "was this expensive" at a glance where "11902" has
+  to be read.
+
+  Public because the scan outcome line formats the same counts, and two
+  formatters would drift into two conventions for the same number.
+  """
+  @spec tok(number()) :: String.t()
+  def tok(n) when n >= 1000, do: "#{Float.round(n / 1000, 1)}k"
+  def tok(n), do: to_string(n)
 
   defp at(%DateTime{} = dt), do: Calendar.strftime(dt, "%H:%M:%S")
   defp at(_), do: "—"

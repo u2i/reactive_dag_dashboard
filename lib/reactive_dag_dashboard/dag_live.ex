@@ -225,16 +225,56 @@ defmodule ReactiveDagDashboard.DagLive do
 
   # "nothing changed" is an ANSWER, not an absence — and distinct again from a
   # scan that could not see: an outage must never render as a clean empty result.
-  defp scan_outcome(cell_id, %{changed: 0, unreachable: []}),
+  #
+  # What it COST is a separate axis from what it found, so it is appended rather
+  # than folded into each clause: a poll that changed nothing can still have
+  # spent real money classifying documents that turned out to be unchanged, and
+  # "nothing changed" alone reads as "this was free".
+  defp scan_outcome(cell_id, result),
+    do: found(cell_id, result) <> cost(Map.get(result, :detail, %{}))
+
+  defp found(cell_id, %{changed: 0, unreachable: []}),
     do: "scanned #{cell_id} — nothing changed"
 
-  defp scan_outcome(cell_id, %{changed: n, unreachable: []}),
+  defp found(cell_id, %{changed: n, unreachable: []}),
     do: "scanned #{cell_id} — #{n} key#{if n == 1, do: "", else: "s"} changed"
 
-  defp scan_outcome(cell_id, %{changed: n, unreachable: up}),
+  defp found(cell_id, %{changed: n, unreachable: up}),
     do:
       "scanned #{cell_id} — #{n} changed, #{length(up)} upstream(s) unreachable, " <>
         "so results are incomplete"
+
+  # Only what a scanner actually reported. A crawler that spends nothing says
+  # nothing, rather than a reassuring "0 tok" on every plain fetch.
+  defp cost(detail) when detail == %{}, do: ""
+
+  defp cost(detail) do
+    tokens = sum_count(detail, :tokens_in) + sum_count(detail, :tokens_out)
+    calls = sum_count(detail, :llm_calls)
+    hits = sum_count(detail, :cache_hits)
+
+    parts =
+      [
+        if(tokens > 0, do: "#{tok(tokens)} tok"),
+        if(calls > 0, do: "#{calls} call#{if calls == 1, do: "", else: "s"}"),
+        # Worth saying even at zero tokens: a crawl over hundreds of documents
+        # that spent nothing BECAUSE the cache held is the change detection
+        # working, not a crawl that did nothing.
+        if(hits > 0, do: "#{hits} cached")
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    if parts == [], do: "", else: " · " <> Enum.join(parts, ", ")
+  end
+
+  # A count may be flat or broken down per model, exactly as on a drain step.
+  defp sum_count(detail, key) do
+    case Map.get(detail, key) do
+      n when is_number(n) -> n
+      m when is_map(m) -> m |> Map.values() |> Enum.filter(&is_number/1) |> Enum.sum()
+      _ -> 0
+    end
+  end
 
   # One entry per DRAIN, newest first, with the roll-ups a log line wants.
   #

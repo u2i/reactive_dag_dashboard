@@ -51,6 +51,15 @@ defmodule ReactiveDagDashboard.DagLiveTest do
   # what was rendered, not at what could be.
   defp markup(html), do: String.replace(html, ~r/<style>.*?<\/style>/s, "")
 
+  # Where a string first appears in the MARKUP — the stylesheet mentions every
+  # class name, so an index over the whole response measures the CSS.
+  defp index_of(html, needle) do
+    case :binary.match(markup(html), needle) do
+      {at, _} -> at
+      :nomatch -> flunk("#{needle} not found")
+    end
+  end
+
   # Just the diagram. The picker lists every cell in the plan, so a question
   # about what the DIAGRAM contains has to be asked of the diagram.
   defp svg_of(html) do
@@ -101,6 +110,16 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       render_click(view, "select", %{"cell" => "category_health"})
 
       assert_patched(view, "#{@path}/cell/category_health")
+    end
+
+    test "the ends that matter for THIS direction come first" do
+      # downstream starts at a source, upstream at an output. Leading with the
+      # wrong end puts the natural starting points a scroll away.
+      {:ok, _view, down} = at(@path)
+      {:ok, _view, up} = at("#{@path}/cell/verdict_audit?direction=upstream")
+
+      assert index_of(down, "sources") < index_of(down, "outputs")
+      assert index_of(up, "outputs") < index_of(up, "sources")
     end
 
     test "the same picker serves both directions" do
@@ -447,6 +466,21 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       # children wrapper is present, and it is not a dead end.
       assert html =~ "rdd-children", "something is nested under something"
       refute markup(html) =~ "rdd-empty"
+    end
+
+    test "upstream renders EXPANDED, because it is a chain not a fan-out" do
+      # rendered collapsed, upstream showed a root and two closed rows and read
+      # as having no hierarchy at all — which is how it was reported. Downstream
+      # collapsing is right (one source reaches twenty cells); upstream narrows,
+      # and the answer is several levels up.
+      {:ok, _view, up} = at("#{@path}/cell/verdict_audit?direction=upstream")
+      {:ok, _view, down} = at("#{@path}/cell/expenses")
+
+      refute markup(up) =~ ~s|rdd-children hidden|,
+             "nothing upstream starts closed"
+
+      assert markup(down) =~ ~s|rdd-children hidden|,
+             "downstream still collapses below depth 1"
     end
 
     test "and a named sink shows its full depth" do

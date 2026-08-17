@@ -57,266 +57,288 @@ defmodule ReactiveDagDashboard.Components do
 
   ## Colour
 
-  Tokens on `.rdd`, with a `prefers-color-scheme` block redefining only the
-  tokens. Both grounds are painted explicitly — a transparent background would
-  borrow the host's, and a page that sets its own text colour on someone else's
-  ground is how white-on-white happens.
+  The compliance portal's tokens, verbatim — `--u2i-bg` `#0e1116`, `--u2i-ink`
+  `#e6edf3`, its border and panel greys, and its accent vocabulary. Same values,
+  so the two surfaces are one look rather than two interpretations of one.
 
-  The four kind colours (source / derive / join / plain) are the one place hue
-  carries meaning rather than decoration, so they are stated rather than derived
-  from opacity ramps of one ink — which is what the daisyUI version did, and it
-  rendered all four as the same grey.
+  **Dark only, deliberately.** This is an instrument panel, and committing to a
+  ground is what makes it read as one. Three earlier passes kept a
+  theme-neutral palette on the reasoning that it should adapt to any host —
+  first opacity ramps of `currentColor`, then a light-first palette with a dark
+  variant — and each time the result resembled nothing in particular. Adapting
+  to every theme is how a design ends up with none.
+
+  The portal's assurance hues map onto a DAG's four kinds by analogy: a SOURCE
+  is *measured* (observed from outside the graph), a derived cell is *derived*,
+  a JOIN *declares* a correspondence between its inputs.
+
+  Kind colours the spine **and the name**. That is the portal's call and the
+  load-bearing one: tinting only the spine leaves a column of identically grey
+  names, which is why an earlier pass still read flat despite having the right
+  structure.
   """
   def styles(assigns) do
     ~H"""
     <style>
-      /* ── tokens ─────────────────────────────────────────────────────────
-         Light by default; the media block redefines ONLY tokens, so every
-         rule below is written once. Both grounds painted explicitly: a
-         transparent background borrows the host's, and our ink on their
-         ground is how white-on-white happens. */
+      /* ── the u2i design-system tokens, VERBATIM ────────────────────────
+         Lifted from the compliance portal's `:root` (assets/css/app.css) and
+         its model tree, unchanged. Same values, same names, so the two
+         surfaces are one look rather than two interpretations of one.
+
+         Dark only, deliberately. This is an instrument panel — committing to
+         a ground is what makes it read as one, and a palette that adapts to
+         any host commits to none. Earlier versions of this file kept a light
+         variant and a theme-neutral accent, and the result resembled nothing.
+
+         `.rdd` rather than `:root`, because a host's page is around us. */
       .rdd {
-        --bg: #ffffff;
-        --panel: #fbfcfd;
-        --panel2: #f2f5f7;
-        --border: #dde3e9;
-        --ink: #1a2027;
-        --dim: #5c6b7a;
-        --faint: #8a97a4;
-        --accent: #2f6fd0;
-        --ok: #1c8a5a;
-        --ok-bg: #e6f5ee;
-        --warn: #a86a12;
-        --warn-bg: #fdf1de;
-        --source: #2f8f6f;
-        --derive: #7d8fa0;
-        --join: #b3762f;
-        --plain: #b9c2cb;
-        --rail: #dde3e9;
+        --bg: #0e1116;
+        --panel: #161b22;
+        --panel2: #1b212b;
+        --border: #2a3441;
+        --ink: #e6edf3;
+        --dim: #9aa7b4;
+        --faint: #6b7886;
+        /* the portal's assurance vocabulary, mapped onto a DAG's four kinds:
+           a SOURCE is measured (observed from outside the graph), a derived
+           cell is derived, a JOIN declares a correspondence between inputs,
+           and `gap` marks a node whose rows are not what they should be. */
+        --measured: #5fd3bc;
+        --derived: #7aa2f7;
+        --attested: #f2c14e;
+        --declared: #c98b5a;
+        --gap: #e8736a;
+        --accent: #7fe9c0;
         --indent: 26px;
 
         background: var(--bg);
         color: var(--ink);
         font: 13px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
         -webkit-font-smoothing: antialiased;
-        padding: 24px;
-        max-width: 1080px;
-        margin: 0 auto;
-      }
-
-      @media (prefers-color-scheme: dark) {
-        .rdd {
-          --bg: #0e1116;
-          --panel: #151b23;
-          --panel2: #1b232d;
-          --border: #283341;
-          --ink: #cdd6df;
-          --dim: #8b9aa9;
-          --faint: #6b7889;
-          --accent: #5c9dff;
-          --ok: #46d39a;
-          --ok-bg: #10261f;
-          --warn: #e0a93f;
-          --warn-bg: #2a2113;
-          --source: #5fd3bc;
-          --derive: #7c8aa0;
-          --join: #c98b5a;
-          --plain: #3a4553;
-          --rail: #283341;
-        }
+        padding: 22px 24px 40px;
+        min-height: 100vh;
       }
 
       .rdd * { box-sizing: border-box }
+      .rdd .hidden { display: none }
 
       /* ── page chrome ───────────────────────────────────────────────── */
       .rdd-head { display: flex; align-items: baseline; justify-content: space-between;
-                  margin-bottom: 14px }
-      .rdd-head h1 { font-size: 18px; font-weight: 650; margin: 0; letter-spacing: -.01em }
+                  margin-bottom: 16px; max-width: 1080px }
+      .rdd-head h1 { font-size: 17px; font-weight: 650; margin: 0; letter-spacing: -.01em;
+                     font-family: ui-monospace, monospace; color: var(--ink) }
 
       .rdd-alert { background: var(--panel2); border: 1px solid var(--border);
-                   border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; font-size: 12.5px }
+                   border-left: 3px solid var(--accent); border-radius: 7px;
+                   padding: 9px 13px; margin-bottom: 14px; font-size: 12.5px;
+                   color: var(--dim); max-width: 1080px }
 
-      .rdd-tabs { display: flex; gap: 2px; margin-bottom: 14px }
-      .rdd-tab { font: inherit; font-size: 12.5px; color: var(--dim); background: none;
-                 border: 0; border-bottom: 2px solid transparent; padding: 4px 10px;
-                 cursor: pointer; border-radius: 0 }
-      .rdd-tab:hover { color: var(--ink) }
-      .rdd-tab.on { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent) }
+      .rdd-tabs { display: flex; gap: 3px; margin-bottom: 16px }
+      .rdd-tab { font: inherit; font-size: 11px; font-weight: 700; letter-spacing: .07em;
+                 text-transform: uppercase; color: var(--faint); background: none;
+                 border: 1px solid transparent; padding: 4px 11px; cursor: pointer;
+                 border-radius: 6px; font-family: ui-monospace, monospace }
+      .rdd-tab:hover { color: var(--dim) }
+      .rdd-tab.on { color: var(--bg); background: var(--accent); border-color: var(--accent) }
 
-      /* ── the picker bar ────────────────────────────────────────────── */
+      /* ── the picker ────────────────────────────────────────────────── */
       .rdd-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-                 margin-bottom: 14px }
-      .rdd-bar-lab { font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
-                     color: var(--faint); font-weight: 700 }
-      .rdd-bar-acts { display: flex; gap: 6px; margin-left: 8px }
-      .rdd-routes { margin-left: auto; font-size: 11.5px; color: var(--faint);
-                    font-variant-numeric: tabular-nums }
+                 margin-bottom: 16px; max-width: 1080px }
+      .rdd-bar-lab { font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em;
+                     color: var(--faint); font-weight: 700;
+                     font-family: ui-monospace, monospace }
+      .rdd-bar-acts { display: flex; gap: 6px; margin-left: 4px }
+      .rdd-routes { margin-left: auto; font-size: 11px; color: var(--faint);
+                    font-variant-numeric: tabular-nums; font-family: ui-monospace, monospace }
 
       .rdd-picker { position: relative }
-      .rdd-pick { font: inherit; font-size: 13px; font-weight: 600; color: var(--ink);
-                  background: var(--panel); border: 1px solid var(--border);
-                  border-radius: 7px; padding: 4px 10px; cursor: pointer;
-                  display: inline-flex; align-items: center; gap: 8px }
-      .rdd-pick:hover { border-color: var(--accent) }
-      .rdd-caret { color: var(--faint); font-size: 10px }
+      .rdd-pick { font: inherit; font-family: ui-monospace, monospace; font-size: 12.5px;
+                  font-weight: 700; color: var(--ink); background: var(--panel);
+                  border: 1px solid var(--border); border-radius: 7px; padding: 5px 11px;
+                  cursor: pointer; display: inline-flex; align-items: center; gap: 9px }
+      .rdd-pick:hover { border-color: var(--accent); color: var(--accent) }
+      .rdd-caret { color: var(--faint); font-size: 9px }
 
-      .rdd-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 30;
-                  background: var(--bg); border: 1px solid var(--border);
-                  border-radius: 9px; padding: 6px; min-width: 260px;
-                  max-height: 380px; overflow-y: auto;
-                  box-shadow: 0 8px 28px rgba(0,0,0,.16) }
-      .rdd-menu-group + .rdd-menu-group { margin-top: 6px; padding-top: 6px;
+      .rdd-menu { position: absolute; top: calc(100% + 5px); left: 0; z-index: 30;
+                  background: var(--panel); border: 1px solid var(--border);
+                  border-radius: 9px; padding: 7px; min-width: 280px;
+                  max-height: 400px; overflow-y: auto;
+                  box-shadow: 0 12px 36px rgba(0,0,0,.5) }
+      .rdd-menu-group + .rdd-menu-group { margin-top: 7px; padding-top: 7px;
                                           border-top: 1px solid var(--border) }
-      .rdd-menu-head { font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em;
+      .rdd-menu-head { font-size: 9px; text-transform: uppercase; letter-spacing: .08em;
                        color: var(--faint); font-weight: 700; padding: 3px 8px;
-                       display: flex; gap: 6px }
+                       display: flex; gap: 7px; font-family: ui-monospace, monospace }
       .rdd-menu-item { display: block; width: 100%; text-align: left; font: inherit;
-                       font-size: 12.5px; color: var(--ink); background: none; border: 0;
+                       font-family: ui-monospace, monospace; font-size: 12px;
+                       color: var(--dim); background: none; border: 0;
                        padding: 4px 8px; border-radius: 5px; cursor: pointer }
-      .rdd-menu-item:hover { background: var(--panel2) }
-      .rdd-menu-item.on { background: var(--panel2); font-weight: 650; color: var(--accent) }
+      .rdd-menu-item:hover { background: var(--panel2); color: var(--ink) }
+      .rdd-menu-item.on { background: var(--panel2); color: var(--accent); font-weight: 700 }
 
       /* ── buttons ───────────────────────────────────────────────────── */
-      .rdd-btn { font: inherit; font-size: 11.5px; color: var(--ink); background: var(--panel);
-                 border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px;
-                 cursor: pointer }
+      .rdd-btn { font: inherit; font-family: ui-monospace, monospace; font-size: 10.5px;
+                 font-weight: 700; letter-spacing: .04em; color: var(--dim);
+                 background: var(--panel); border: 1px solid var(--border);
+                 border-radius: 6px; padding: 4px 10px; cursor: pointer }
       .rdd-btn:hover { border-color: var(--accent); color: var(--accent) }
-      .rdd-ghost { background: none; border-color: transparent; color: var(--dim) }
-      .rdd-ghost:hover { background: var(--panel2); color: var(--ink); border-color: transparent }
+      .rdd-ghost { background: none }
 
       .rdd-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px;
                  overflow: hidden }
-      .rdd-segbtn { font: inherit; font-size: 11.5px; color: var(--dim); background: var(--panel);
-                    border: 0; padding: 4px 10px; cursor: pointer }
+      .rdd-segbtn { font: inherit; font-family: ui-monospace, monospace; font-size: 10.5px;
+                    font-weight: 700; letter-spacing: .04em; color: var(--faint);
+                    background: var(--panel); border: 0; padding: 5px 11px; cursor: pointer }
       .rdd-segbtn + .rdd-segbtn { border-left: 1px solid var(--border) }
       .rdd-segbtn:hover { color: var(--ink) }
-      .rdd-segbtn.on { background: var(--accent); color: #fff; font-weight: 600 }
+      .rdd-segbtn.on { background: var(--accent); color: var(--bg) }
 
-      /* ── badges ────────────────────────────────────────────────────── */
+      /* ── badges: a tint of the hue, with the hue as the text ──────────
+         The portal's `color-mix(in srgb, <hue> 22%, transparent)` fill under
+         text of the SAME hue. A flat pastel background with darker text —
+         which is what this had — reads as a different design language. */
       .rdd-badge { font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 100px;
-                   white-space: nowrap; letter-spacing: .01em }
-      .rdd-b-ok { background: var(--ok-bg); color: var(--ok) }
-      .rdd-b-warn { background: var(--warn-bg); color: var(--warn) }
-      .rdd-b-mute { background: var(--panel2); color: var(--faint) }
+                   white-space: nowrap; font-family: ui-monospace, monospace;
+                   letter-spacing: .03em }
+      .rdd-b-ok { background: color-mix(in srgb, var(--measured) 22%, transparent);
+                  color: var(--measured) }
+      .rdd-b-warn { background: color-mix(in srgb, var(--gap) 20%, transparent);
+                    color: #e8918a }
+      .rdd-b-mute { background: #222a36; color: var(--faint) }
 
       /* ── the dead end ──────────────────────────────────────────────── */
-      .rdd-empty { border: 1px dashed var(--border); border-radius: 9px; padding: 18px;
-                   background: var(--panel); text-align: center; color: var(--dim) }
-      .rdd-empty p { margin: 0 0 10px }
-      .rdd-empty strong { color: var(--ink); font-weight: 650 }
+      .rdd-empty { border: 1px dashed var(--border); border-radius: 9px; padding: 22px;
+                   background: var(--panel); text-align: center; color: var(--dim);
+                   max-width: 1080px }
+      .rdd-empty p { margin: 0 0 12px }
+      .rdd-empty strong { color: var(--ink); font-weight: 700;
+                          font-family: ui-monospace, monospace }
 
-      .rdd-cap { font-size: 11.5px; color: var(--faint); margin: 6px 0 0 }
-      .rdd-cap code { font-family: ui-monospace, monospace; color: var(--dim) }
+      .rdd-cap { font-size: 11px; color: var(--faint); margin: 8px 0 0;
+                 font-family: ui-monospace, monospace }
+      .rdd-cap code { color: var(--dim) }
 
-      /* ── the expression tree ───────────────────────────────────────────
-         Nesting is REAL: a node's children live in a wrapper inside it,
-         carrying the indent and a dashed rail. Depth is containment, not a
-         computed margin, so a subtree is a bounded region of the page. */
-      .rdd-tree { --indent: 26px }
+      /* ── the expression tree — the portal's model tree ────────────────
+         `.row` is a bordered card; `.children` nests INSIDE the node with the
+         indent and a dashed rail. Both verbatim from
+         lib/u2i_portal_web/components/model_tree.ex. */
+      .rdd-tree { --indent: 26px; max-width: 1080px }
       .rdd-node { margin: 6px 0 }
 
       .rdd-row { display: flex; align-items: flex-start; gap: 10px;
                  border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px;
-                 background: var(--panel); position: relative; overflow: hidden;
-                 cursor: pointer }
-      .rdd-row:hover { border-color: var(--dim) }
-      .rdd-on > .rdd-row, .rdd-row.rdd-on { border-color: var(--accent); background: var(--panel2) }
+                 background: var(--panel); position: relative; cursor: pointer }
+      .rdd-row:hover { border-color: #3a4655 }
+      .rdd-on > .rdd-row, .rdd-row.rdd-on { border-color: var(--accent);
+                                            background: var(--panel2) }
 
-      /* a set, not a single row — the stacked-card glyph, matching the SVG.
-         The opaque --panel layers between the borders are what keep the four
-         shadows readable as separate cards rather than one smear. */
+      /* a set, not a single row — the portal's four-layer stacked card */
       .rdd-many > .rdd-row {
         box-shadow: 3px 3px 0 0 var(--panel), 4px 4px 0 0 var(--border),
                     6px 6px 0 0 var(--panel), 7px 7px 0 0 var(--border);
       }
       .rdd-many { margin-bottom: 12px }
 
-      /* the kind spine, bled to the card edges */
+      /* the spine, bled to the card edges by negative margin */
       .rdd-lead { width: 4px; align-self: stretch; flex: 0 0 4px; margin: -9px 0 -9px -12px;
-                  border-radius: 9px 0 0 9px; background: var(--plain) }
-      .rdd-source > .rdd-row > .rdd-lead { background: var(--source) }
-      .rdd-derive > .rdd-row > .rdd-lead { background: var(--derive) }
-      .rdd-join   > .rdd-row > .rdd-lead { background: var(--join) }
+                  border-radius: 9px 0 0 9px; background: var(--border) }
 
-      .rdd-chev { font-family: ui-monospace, monospace; font-size: 10px; color: var(--faint);
-                  user-select: none; width: 10px; flex: 0 0 10px; margin-top: 3px;
-                  transition: transform .12s ease }
+      /* KIND on the spine AND the name — the portal tints both, which is what
+         makes a column of names scannable as kinds before they are read. */
+      .rdd-source > .rdd-row > .rdd-lead { background: var(--measured) }
+      .rdd-source > .rdd-row .rdd-name button { color: #8fe0d0 }
+      .rdd-derive > .rdd-row > .rdd-lead { background: #4a5a6a }
+      .rdd-derive > .rdd-row .rdd-name button { color: #9fb0c0 }
+      .rdd-join   > .rdd-row > .rdd-lead { background: var(--declared) }
+      .rdd-join   > .rdd-row .rdd-name button { color: #e0b884 }
+      .rdd-plain  > .rdd-row > .rdd-lead { background: var(--border) }
+      .rdd-plain  > .rdd-row .rdd-name button { color: #cdd6df }
+
+      .rdd-chev { flex: 0 0 14px; width: 14px; text-align: center; color: var(--faint);
+                  font-size: 10px; align-self: flex-start; margin-top: 1px;
+                  user-select: none; transition: transform .12s }
       .rdd-chev-none { visibility: hidden }
       .rotate-90 { transform: rotate(90deg) }
 
       .rdd-body { flex: 1; min-width: 0 }
 
-      /* two lines: a small uppercase KIND line, then the NAME at reading
-         weight. One baseline row put id, badges, algebra and count at the
-         same weight and nothing won. */
       .rdd-kind { font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em;
                   color: var(--faint); font-weight: 700; display: flex; flex-wrap: wrap;
                   align-items: center; gap: 6px }
-      .rdd-op { font-family: ui-monospace, monospace; text-transform: none;
-                letter-spacing: 0; font-weight: 500; color: var(--dim); font-size: 10.5px }
-      .rdd-ccount { background: var(--panel2); color: var(--faint); border-radius: 100px;
-                    padding: 1px 6px; font-size: 9px }
+      .rdd-op { font-family: ui-monospace, monospace; font-weight: 700; color: #9fb0c0;
+                text-transform: none; letter-spacing: 0; font-size: 10.5px }
+      .rdd-ccount { font-family: ui-monospace, monospace; font-size: 9px; background: #222a36;
+                    color: var(--dim); padding: 0 6px; border-radius: 100px }
       .rdd-grain { font-family: ui-monospace, monospace; font-size: 9px; font-weight: 700;
                    padding: 1px 6px; border-radius: 100px; text-transform: none }
-      .rdd-grain-many { background: var(--warn-bg); color: var(--warn) }
-      .rdd-grain-one { background: var(--panel2); color: var(--faint); font-style: italic }
+      .rdd-grain-many { background: color-mix(in srgb, #bb9af7 18%, transparent);
+                        color: #cdb6fb }
+      .rdd-grain-one { background: #222a36; color: var(--faint) }
 
-      .rdd-name { font-size: 13.5px; font-weight: 600; margin-top: 1px; color: var(--ink) }
-      .rdd-name button { font: inherit; color: inherit; background: none; border: 0;
-                         padding: 0; cursor: pointer; text-align: left }
-      .rdd-name button:hover { color: var(--accent) }
+      .rdd-name { font-size: 13.5px; font-weight: 600; margin-top: 1px }
+      .rdd-name button { font: inherit; background: none; border: 0; padding: 0;
+                         cursor: pointer; text-align: left; color: #cdd6df }
+      .rdd-name button:hover { text-decoration: underline }
 
-      .rdd-count { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums;
-                   margin-left: auto; padding-left: 12px; flex-shrink: 0; margin-top: 2px }
+      .rdd-count { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums;
+                   font-family: ui-monospace, monospace; margin-left: auto;
+                   padding-left: 12px; flex-shrink: 0; margin-top: 2px }
 
       .rdd-children { margin-left: var(--indent); padding-left: 16px;
-                      border-left: 1px dashed var(--rail) }
-      .rdd .hidden { display: none }
+                      border-left: 1px dashed #283341 }
 
       /* ── the node panel ────────────────────────────────────────────── */
       .rdd-card { border: 1px solid var(--border); border-radius: 9px; background: var(--panel);
-                  padding: 14px 16px; margin-top: 18px }
-      .rdd-card h2 { font-size: 15px; font-weight: 650; margin: 0 }
-      .rdd-card-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
-                       margin-bottom: 8px }
-      .rdd-lede { font-size: 12.5px; color: var(--dim); margin: 0 0 10px }
-      .rdd-facts { display: flex; gap: 16px; flex-wrap: wrap; font-size: 11.5px;
-                   color: var(--dim); margin-bottom: 10px }
-      .rdd-facts .k { color: var(--faint); text-transform: uppercase; font-size: 9.5px;
-                      letter-spacing: .07em; font-weight: 700; margin-right: 4px }
-      .rdd-sec { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px }
-      .rdd-sec-head { font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em;
-                      color: var(--faint); font-weight: 700; margin-bottom: 6px }
+                  padding: 15px 17px; margin-top: 20px; max-width: 1080px }
+      .rdd-card h2 { font-size: 15px; font-weight: 700; margin: 0;
+                     font-family: ui-monospace, monospace; color: var(--ink) }
+      .rdd-card-head { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap;
+                       margin-bottom: 9px }
+      .rdd-lede { font-size: 12.5px; color: var(--dim); margin: 0 0 11px; max-width: 68ch }
+      .rdd-facts { display: flex; gap: 18px; flex-wrap: wrap; font-size: 11.5px;
+                   color: var(--dim); margin-bottom: 11px }
+      .rdd-facts .k { color: var(--faint); text-transform: uppercase; font-size: 9px;
+                      letter-spacing: .07em; font-weight: 700; margin-right: 5px;
+                      font-family: ui-monospace, monospace }
+      .rdd-sec { border-top: 1px solid var(--border); padding-top: 11px; margin-top: 11px }
+      .rdd-sec-head { font-size: 9px; text-transform: uppercase; letter-spacing: .08em;
+                      color: var(--faint); font-weight: 700; margin-bottom: 7px;
+                      font-family: ui-monospace, monospace }
       .rdd-row-acts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap }
-      .rdd-link { color: var(--accent); text-decoration: none; font-size: 11.5px }
+      .rdd-link { color: var(--derived); text-decoration: none; font-size: 11px;
+                  font-family: ui-monospace, monospace }
       .rdd-link:hover { text-decoration: underline }
       .rdd-mono { font-family: ui-monospace, monospace; font-size: 11px; color: var(--dim) }
 
       .rdd-tbl { width: 100%; border-collapse: collapse; font-size: 11.5px }
-      .rdd-tbl td { padding: 3px 8px 3px 0; color: var(--dim);
-                    font-variant-numeric: tabular-nums }
+      .rdd-tbl td { padding: 4px 10px 4px 0; color: var(--dim);
+                    font-variant-numeric: tabular-nums; font-family: ui-monospace, monospace }
       .rdd-tbl tr + tr td { border-top: 1px solid var(--border) }
 
       /* ── the SVG graph ─────────────────────────────────────────────── */
       .rdd-graph { color: var(--ink); display: block }
       .rdd-gwrap { border: 1px solid var(--border); border-radius: 9px; background: var(--panel);
-                   padding: 8px; overflow-x: auto }
+                   padding: 10px; overflow-x: auto; max-width: 1080px }
 
-      .rdd-gbox { fill: none; stroke: var(--border); stroke-width: 1.5; cursor: pointer }
-      .rdd-gbox:hover { stroke: var(--dim) }
+      .rdd-gbox { fill: var(--panel2); stroke: var(--border); stroke-width: 1.5;
+                  cursor: pointer }
+      .rdd-gbox:hover { stroke: #3a4655 }
       .rdd-gbox-on { stroke: var(--accent); stroke-width: 2 }
-      .rdd-gstack { fill: none; stroke: var(--border); opacity: .5 }
+      .rdd-gstack { fill: none; stroke: var(--border); opacity: .6 }
 
-      .rdd-gop { fill: var(--panel); stroke: var(--derive); stroke-width: 1.5; cursor: pointer }
-      .rdd-gop:hover { stroke: var(--ink) }
+      .rdd-gop { fill: var(--bg); stroke: #4a5a6a; stroke-width: 1.5; cursor: pointer }
+      .rdd-gop:hover { stroke: var(--dim) }
       .rdd-gop-on { stroke: var(--accent); stroke-width: 2 }
 
-      .rdd-edge { stroke: var(--border); stroke-width: 1.4; fill: none }
+      .rdd-edge { stroke: #2a3441; stroke-width: 1.4; fill: none }
       .rdd-edge-hot { stroke: var(--accent); stroke-width: 2 }
 
-      .rdd-gtext { font-size: 11.5px; font-weight: 600; fill: var(--ink) }
-      .rdd-gsub { font-size: 9.5px; fill: var(--faint); font-variant-numeric: tabular-nums }
-      .rdd-goplabel { font-size: 9.5px; fill: var(--dim); font-family: ui-monospace, monospace }
+      .rdd-gtext { font-size: 11.5px; font-weight: 600; fill: #cdd6df;
+                   font-family: ui-monospace, monospace }
+      .rdd-gsub { font-size: 9px; fill: var(--faint); font-family: ui-monospace, monospace;
+                  text-transform: uppercase; letter-spacing: .06em }
+      .rdd-goplabel { font-size: 9.5px; fill: #9fb0c0; font-family: ui-monospace, monospace;
+                      font-weight: 700 }
     </style>
     """
   end

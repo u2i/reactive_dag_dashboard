@@ -163,8 +163,10 @@ defmodule ReactiveDagDashboard.Tree do
   Empty groups are dropped, so a graph with no convergence does not render an
   empty heading.
   """
-  @spec groups(Plan.t()) :: [{String.t(), [String.t()]}]
-  def groups(%Plan{cells: cells} = plan) do
+  @spec groups(Plan.t(), :upstream | :downstream) :: [{String.t(), [String.t()]}]
+  def groups(plan, direction \\ :downstream)
+
+  def groups(%Plan{cells: cells} = plan, direction) do
     roots = roots(plan)
     sinks = sinks(plan)
 
@@ -174,7 +176,15 @@ defmodule ReactiveDagDashboard.Tree do
       |> Enum.reject(&(&1 in roots or &1 in sinks))
       |> Enum.sort()
 
-    [{"sources", roots}, {"derived", derived}, {"outputs", sinks}]
+    # The ends that MATTER for this direction come first, because they are what
+    # someone arrives wanting. Downstream the question is "a change lands here,
+    # what breaks" and it starts at a source; upstream it is "this table is
+    # wrong, where did it come from" and it starts at an output. Leading with
+    # the wrong end makes the natural starting points a scroll away.
+    case direction do
+      :upstream -> [{"outputs", sinks}, {"derived", derived}, {"sources", roots}]
+      _ -> [{"sources", roots}, {"derived", derived}, {"outputs", sinks}]
+    end
     |> Enum.reject(fn {_label, ids} -> ids == [] end)
   end
 
@@ -266,8 +276,10 @@ defmodule ReactiveDagDashboard.Tree do
   (collapsed below depth 1, as before). `children` remains the COUNT, because a
   collapsed row still has to say how much is folded under it.
   """
-  @spec nested(Plan.t(), node_t()) :: map()
-  def nested(%Plan{} = plan, tree) do
+  @spec nested(Plan.t(), node_t(), :upstream | :downstream) :: map()
+  def nested(plan, tree, direction \\ :downstream)
+
+  def nested(%Plan{} = plan, tree, direction) do
     arrivals =
       tree
       |> flatten()
@@ -275,17 +287,27 @@ defmodule ReactiveDagDashboard.Tree do
       |> Enum.group_by(& &1.id, & &1.via)
       |> Map.new(fn {id, vias} -> {id, vias |> Enum.uniq() |> Enum.sort()} end)
 
-    walk_nested(tree, arrivals, plan, 0, tree.id)
+    walk_nested(tree, arrivals, plan, 0, tree.id, open_depth(direction))
   end
 
-  defp walk_nested(node, arrivals, plan, depth, path) do
+  # How deep to render EXPANDED, which is a different answer per direction.
+  #
+  # Downstream fans out: one source reaches twenty cells, so depth 1 is a
+  # summary and anything more is a wall. Upstream narrows to a chain — "what
+  # feeds this, and what fed that" — and the answer is usually several levels
+  # up, so collapsing it hides the whole point. Rendered collapsed, upstream
+  # showed a root and two closed rows and read as having no hierarchy at all.
+  defp open_depth(:upstream), do: :infinity
+  defp open_depth(_downstream), do: 1
+
+  defp walk_nested(node, arrivals, plan, depth, path, open_to) do
     children = if node.cyclic?, do: [], else: node.children
 
     kids =
       children
       |> Enum.with_index()
       |> Enum.map(fn {child, i} ->
-        walk_nested(child, arrivals, plan, depth + 1, "#{path}-#{i}")
+        walk_nested(child, arrivals, plan, depth + 1, "#{path}-#{i}", open_to)
       end)
 
     %{
@@ -298,9 +320,9 @@ defmodule ReactiveDagDashboard.Tree do
       arrivals: Map.get(arrivals, node.id, []),
       routes: length(Map.get(arrivals, node.id, [])),
       children: length(children),
-      # collapsed below depth 1: a 7-deep graph is unreadable fully expanded,
-      # and the top level is what someone arrives wanting to see
-      closed?: children != [] and depth >= 1,
+      # see `open_depth/1`: downstream fans out and collapses below depth 1,
+      # upstream is a chain and renders open
+      closed?: children != [] and open_to != :infinity and depth >= open_to,
       kids: kids,
       path: path
     }

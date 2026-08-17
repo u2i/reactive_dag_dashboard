@@ -300,6 +300,31 @@ defmodule ReactiveDagDashboard.Components do
                   align-items: center; gap: 6px }
       .rdd-op { font-family: ui-monospace, monospace; font-weight: 700; color: #9fb0c0;
                 text-transform: none; letter-spacing: 0; font-size: 10.5px }
+      /* the operation, as a link to what implements it */
+      .rdd-op-link { text-decoration: none; border-bottom: 1px dotted transparent }
+      .rdd-op-link:hover { color: var(--derived); border-bottom-color: var(--derived) }
+
+      /* a scanner's cadence, next to its name */
+      .rdd-cadence { font-family: ui-monospace, monospace; font-size: 9.5px;
+                     color: var(--faint); text-transform: none; letter-spacing: 0 }
+
+      /* scan controls, inline on the ~6 rows that declare a scanner */
+      .rdd-scan { display: inline-flex; gap: 4px; align-items: center; margin-left: 2px }
+      .rdd-mini { font: inherit; font-family: ui-monospace, monospace; font-size: 9px;
+                  font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+                  color: var(--measured); background: color-mix(in srgb, var(--measured) 14%, transparent);
+                  border: 1px solid color-mix(in srgb, var(--measured) 30%, transparent);
+                  border-radius: 100px; padding: 1px 8px; cursor: pointer }
+      .rdd-mini:hover { background: var(--measured); color: var(--bg);
+                        border-color: var(--measured) }
+      /* a slice is a narrowing of the same act, so it reads as a variant of
+         the button beside it rather than a different control */
+      .rdd-mini-slice { color: var(--attested); text-transform: none;
+                        background: color-mix(in srgb, var(--attested) 14%, transparent);
+                        border-color: color-mix(in srgb, var(--attested) 30%, transparent) }
+      .rdd-mini-slice:hover { background: var(--attested); color: var(--bg);
+                              border-color: var(--attested) }
+
       .rdd-ccount { font-family: ui-monospace, monospace; font-size: 9px; background: #222a36;
                     color: var(--dim); padding: 0 6px; border-radius: 100px }
       .rdd-grain { font-family: ui-monospace, monospace; font-size: 9px; font-weight: 700;
@@ -455,8 +480,34 @@ defmodule ReactiveDagDashboard.Components do
 
         <div class="rdd-body">
           <div class="rdd-kind">
-            <span :if={application(@node)} class="rdd-op"><%= application(@node) %></span>
-            <span :if={!application(@node)} class="rdd-op">leaf</span>
+            <%!-- The operation IS the link. The kind line already prints what
+                  this node does — `REDUCE( … )`, `AgendaItems( … )` — and the
+                  module that implements it is what you want when you read
+                  that. A separate icon would be a third element on a line that
+                  already carries an operator and a count; the link used to sit
+                  inside the drawer, where nobody found it. --%>
+            <a
+              :if={@details[@node.id] && link_url(@details[@node.id])}
+              href={link_url(@details[@node.id])}
+              target="_blank"
+              rel="noopener"
+              class="rdd-op rdd-op-link"
+              title={link_title(@details[@node.id])}
+            >
+              <%= op_label(@node, @details[@node.id]) %> ↗
+            </a>
+            <span
+              :if={!(@details[@node.id] && link_url(@details[@node.id]))}
+              class="rdd-op"
+            >
+              <%= op_label(@node, @details[@node.id]) %>
+            </span>
+
+            <%!-- A scanner's CADENCE, beside its name: "every 0 12 * * *" is
+                  what tells you whether a stale count is expected. --%>
+            <span :if={cadence(@details[@node.id])} class="rdd-cadence">
+              · <%= cadence(@details[@node.id]) %>
+            </span>
 
             <span :if={@node.children > 1} class="rdd-ccount"><%= @node.children %></span>
 
@@ -473,6 +524,47 @@ defmodule ReactiveDagDashboard.Components do
               class={["rdd-badge", status_badge(status)]}
             >
               <%= status %> <%= n %>
+            </span>
+
+            <%!-- Scan controls INLINE, and only where they mean something. Six
+                  of this graph's 33 cells declare a scanner, so the cost is
+                  six rows carrying three small buttons and 27 carrying none —
+                  against a drawer you had to open to find the thing you came
+                  to press. --%>
+            <span :if={scanner(@details[@node.id])} class="rdd-scan">
+              <button
+                class="rdd-mini"
+                phx-click="scan"
+                phx-value-cell={@node.id}
+                phx-value-mode="default"
+                title="poll with the declared args"
+              >
+                scan
+              </button>
+
+              <button
+                :if={scanner(@details[@node.id]).args != []}
+                class="rdd-mini"
+                phx-click="scan"
+                phx-value-cell={@node.id}
+                phx-value-mode="full"
+                title="ignores the declared bound"
+              >
+                full
+              </button>
+
+              <button
+                :for={{slice, value} <- slice_values(@details[@node.id])}
+                class="rdd-mini rdd-mini-slice"
+                phx-click="scan"
+                phx-value-cell={@node.id}
+                phx-value-mode="default"
+                phx-value-column={slice.column}
+                phx-value-value={value}
+                title={"poll for #{slice.label} #{value} only"}
+              >
+                <%= value %>
+              </button>
             </span>
           </div>
 
@@ -506,6 +598,48 @@ defmodule ReactiveDagDashboard.Components do
       </div>
     </div>
     """
+  end
+
+  # What this node DOES, as the kind line's headline.
+  #
+  # A scanner says so and names itself — `poll · Village AgendaCenter` — rather
+  # than the generic "leaf" every source used to share. The teal spine already
+  # says "nothing feeds this", which is not the same as "something crawls it",
+  # and it could not say WHAT crawls it. `origin/0` is the scanner's own name
+  # for itself and is usually the most recognisable string on the row.
+  defp op_label(node, detail) do
+    cond do
+      s = scanner(detail) -> "poll · #{origin_label(s) || short(s.source)}"
+      app = application(node) -> app
+      true -> "leaf"
+    end
+  end
+
+  defp origin_label(%{origin: origin}) when is_map(origin), do: origin[:label]
+  defp origin_label(_), do: nil
+
+  defp scanner(%{scanner: %{} = s}), do: s
+  defp scanner(_), do: nil
+
+  defp cadence(detail) do
+    case scanner(detail) do
+      %{every: every} when is_binary(every) -> "every #{every}"
+      _ -> nil
+    end
+  end
+
+  defp link_url(%{implementation: %{url: url}}) when is_binary(url), do: url
+  defp link_url(_), do: nil
+
+  defp link_title(%{implementation: %{module: mod}}), do: "#{inspect(mod)} ↗"
+  defp link_title(_), do: nil
+
+  # `{slice, value}` pairs, flattened — a slice with no enumerable values
+  # renders nothing rather than a label with no buttons after it.
+  defp slice_values(detail) do
+    for slice <- Map.get(detail || %{}, :slices, []),
+        value <- slice.values || [],
+        do: {slice, value}
   end
 
   # Open this row's detail. Per PATH, not per cell: a converging node is drawn

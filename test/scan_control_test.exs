@@ -74,10 +74,13 @@ defmodule ReactiveDagDashboard.ScanControlTest do
     end
 
     test "a derived cell gets no control — it has no scanner to run" do
+      # asserted on the MARKUP: the stylesheet names every class, so matching
+      # the whole response finds the rule rather than the control
       {_view, html} = drawer("category_health")
+      body = String.replace(html, ~r/<style>.*?<\/style>/s, "")
 
-      refute html =~ "rdd-scan"
-      refute html =~ "run scan"
+      refute body =~ ~s|class="rdd-scan"|
+      refute body =~ "run scan"
     end
   end
 

@@ -428,36 +428,115 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     end
   end
 
-  describe "collapse — a 7-deep graph is unreadable expanded" do
-    test "rows below depth 1 start hidden" do
+  describe "the row says what it is and what you can do to it" do
+    test "a scanner names itself instead of reading 'leaf'" do
+      # the teal spine says "nothing feeds this", which is not the same as
+      # "something crawls it" — and it could not say WHAT crawls it. `origin/0`
+      # is the scanner's own name for itself.
       {:ok, _view, html} = at("#{@path}/cell/expenses")
 
-      # From `expenses`, which is 4 deep. The default root reaches only 2
-      # levels, so nothing under it is deep enough to start collapsed — the old
-      # flat markup hid rows across all seven source panels at once, which is
-      # why this passed against any cell.
-      #
-      # The CHILDREN WRAPPER is what hides now: one element per subtree, rather
-      # than a class on every descendant row.
-      {:ok, _view, deep} = at("#{@path}/cell/expenses")
-
-      assert Regex.match?(~r/class="[^"]*\brdd-children\b[^"]*\bhidden\b/, deep)
+      assert html =~ "poll · Finance export"
     end
 
-    test "a collapsible row carries its child count" do
-      # a collapsed row with no count looks like a leaf, which is the failure
-      # mode of collapsing by default
+    test "and its cadence, since that is what makes a stale count expected" do
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      assert html =~ "every 0 * * * *"
+    end
+
+    test "a derived row keeps its operation as the headline" do
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      assert html =~ "reduce( folded: expenses ) by :category"
+    end
+
+    test "the operation LINKS to what implements it" do
+      # it used to sit inside the drawer, where nobody found it — which is why
+      # the links read as not working when they resolved perfectly well
+      Application.put_env(:reactive_dag_dashboard, :source_url, "https://ex.com/%{path}#L%{line}")
+      on_exit(fn -> Application.put_env(:reactive_dag_dashboard, :source_url, nil) end)
+
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      assert html =~ "rdd-op-link"
+      assert html =~ ~s|href="https://ex.com/|
+    end
+
+    test "scan controls ride on the scannable row itself" do
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      assert html =~ ~s|class="rdd-scan"|
+      assert html =~ ~s|phx-value-mode="full"|, "and the full-scan variant"
+    end
+
+    test "including one button per slice value" do
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      assert html =~ ~s|phx-value-column="fiscal_year"|
+      assert html =~ "FY25"
+    end
+
+    test "a slice with no enumerable values renders no buttons" do
+      # `values:` is optional, and a label followed by nothing reads as broken
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      refute markup(html) =~ ~s|rdd-mini-slice"></button>|
+    end
+
+    test "and a row with no scanner carries none of it" do
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      # `category_health` is derived; only its ancestor `expenses` is polled
+      [_, below] = String.split(markup(html), "category_health", parts: 2)
+      [row, _] = String.split(below, "rdd-node", parts: 2)
+
+      refute row =~ ~s|class="rdd-scan"|
+    end
+  end
+
+  describe "the tree renders expanded" do
+    test "nothing starts collapsed" do
+      # A scoped tree is small — the largest in a real 33-cell graph is 29 rows
+      # and the median is 6 — so collapsing bought nothing and cost the thing
+      # you came to read. Upstream had the worse version of this: it opened
+      # showing a root and two closed rows, and read as having no hierarchy.
+      {:ok, _view, down} = at("#{@path}/cell/expenses")
+      {:ok, _view, up} = at("#{@path}/cell/verdict_audit?direction=upstream")
+
+      refute markup(down) =~ ~s|rdd-children hidden|
+      refute markup(up) =~ ~s|rdd-children hidden|
+    end
+
+    test "so the whole depth is on screen without touching anything" do
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      # expenses → category_health → all_verdicts → verdict_audit, four levels
+      assert html =~ "category_health"
+      assert html =~ "all_verdicts"
+      assert html =~ "verdict_audit"
+    end
+
+    test "a branch still folds by hand" do
+      # the chevron stays: expanded by default is not the same as unfoldable,
+      # and a wide branch in the way should be closable
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      assert html =~ "rdd-chev"
+      assert html =~ "kids-"
+    end
+
+    test "and the page-level expand/collapse buttons are gone" do
+      # they controlled a state nothing starts in
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      refute markup(html) =~ "expand all"
+      refute markup(html) =~ "collapse"
+    end
+
+    test "a row with children still carries its count" do
       {:ok, _view, html} = at("#{@path}/cell/expenses")
 
       assert html =~ "rdd-ccount"
-    end
-
-    test "expand and collapse are client-side, with no server round-trip" do
-      {:ok, _view, html} = at("#{@path}/cell/expenses")
-
-      assert html =~ "expand all"
-      assert html =~ "remove_class"
-      refute html =~ ~s|phx-click="expand"|
     end
   end
 
@@ -506,21 +585,6 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       # children wrapper is present, and it is not a dead end.
       assert html =~ "rdd-children", "something is nested under something"
       refute markup(html) =~ "rdd-empty"
-    end
-
-    test "upstream renders EXPANDED, because it is a chain not a fan-out" do
-      # rendered collapsed, upstream showed a root and two closed rows and read
-      # as having no hierarchy at all — which is how it was reported. Downstream
-      # collapsing is right (one source reaches twenty cells); upstream narrows,
-      # and the answer is several levels up.
-      {:ok, _view, up} = at("#{@path}/cell/verdict_audit?direction=upstream")
-      {:ok, _view, down} = at("#{@path}/cell/expenses")
-
-      refute markup(up) =~ ~s|rdd-children hidden|,
-             "nothing upstream starts closed"
-
-      assert markup(down) =~ ~s|rdd-children hidden|,
-             "downstream still collapses below depth 1"
     end
 
     test "and a named sink shows its full depth" do

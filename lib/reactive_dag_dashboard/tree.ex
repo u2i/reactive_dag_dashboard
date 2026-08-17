@@ -258,10 +258,8 @@ defmodule ReactiveDagDashboard.Tree do
   (collapsed below depth 1, as before). `children` remains the COUNT, because a
   collapsed row still has to say how much is folded under it.
   """
-  @spec nested(Plan.t(), node_t(), :upstream | :downstream) :: map()
-  def nested(plan, tree, direction \\ :downstream)
-
-  def nested(%Plan{} = plan, tree, direction) do
+  @spec nested(Plan.t(), node_t()) :: map()
+  def nested(%Plan{} = plan, tree) do
     arrivals =
       tree
       |> flatten()
@@ -269,27 +267,17 @@ defmodule ReactiveDagDashboard.Tree do
       |> Enum.group_by(& &1.id, & &1.via)
       |> Map.new(fn {id, vias} -> {id, vias |> Enum.uniq() |> Enum.sort()} end)
 
-    walk_nested(tree, arrivals, plan, 0, tree.id, open_depth(direction))
+    walk_nested(tree, arrivals, plan, 0, tree.id)
   end
 
-  # How deep to render EXPANDED, which is a different answer per direction.
-  #
-  # Downstream fans out: one source reaches twenty cells, so depth 1 is a
-  # summary and anything more is a wall. Upstream narrows to a chain — "what
-  # feeds this, and what fed that" — and the answer is usually several levels
-  # up, so collapsing it hides the whole point. Rendered collapsed, upstream
-  # showed a root and two closed rows and read as having no hierarchy at all.
-  defp open_depth(:upstream), do: :infinity
-  defp open_depth(_downstream), do: 1
-
-  defp walk_nested(node, arrivals, plan, depth, path, open_to) do
+  defp walk_nested(node, arrivals, plan, depth, path) do
     children = if node.cyclic?, do: [], else: node.children
 
     kids =
       children
       |> Enum.with_index()
       |> Enum.map(fn {child, i} ->
-        walk_nested(child, arrivals, plan, depth + 1, "#{path}-#{i}", open_to)
+        walk_nested(child, arrivals, plan, depth + 1, "#{path}-#{i}")
       end)
 
     %{
@@ -302,9 +290,11 @@ defmodule ReactiveDagDashboard.Tree do
       arrivals: Map.get(arrivals, node.id, []),
       routes: length(Map.get(arrivals, node.id, [])),
       children: length(children),
-      # see `open_depth/1`: downstream fans out and collapses below depth 1,
-      # upstream is a chain and renders open
-      closed?: children != [] and open_to != :infinity and depth >= open_to,
+      # Nothing starts closed. A scoped tree is small — the largest in a real
+      # 33-cell graph is 29 rows and the median is 6 — so collapsing bought
+      # nothing and cost the thing you came to read. The chevron still folds a
+      # branch by hand when one is in the way.
+      closed?: false,
       kids: kids,
       path: path
     }

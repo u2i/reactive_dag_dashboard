@@ -231,6 +231,92 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
   # anything renders with it — `refute html =~ "rdd-ran-badge"` matches the RULE.
   defp body(html), do: String.replace(html, ~r/<style>.*?<\/style>/s, "")
 
+  describe "a scan that found nothing still shows it ran" do
+    # The gap: a queued scan said "results appear as it drains", and a poll that
+    # found nothing dirties nothing — so no `:drain_step` ever arrived and the
+    # page was identical to one where the button was never pressed. A working
+    # scan read as a broken button on exactly the runs where it worked.
+
+    test "the observer bridges scan telemetry, not only drain" do
+      Observer.attach(@pubsub)
+      Phoenix.PubSub.subscribe(@pubsub, Observer.topic())
+
+      # emitted the way ScanWorker emits it, so this fails if the payload shape
+      # the Observer reads ever drifts from what the library sends
+      :telemetry.execute(
+        [:reactive_dag, :scan, :stop],
+        %{duration_us: 10, changed: 0, passes: 1},
+        %{cell: "expenses", args: %{}, unreachable: [], report: nil}
+      )
+
+      assert_receive {:scan_done, "expenses", %{changed: 0, unreachable: []}}
+    end
+
+    test "a no-op scan leaves a trail saying so" do
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+      :telemetry.execute(
+        [:reactive_dag, :scan, :stop],
+        %{duration_us: 10, changed: 0, passes: 1},
+        %{cell: "expenses", args: %{}, unreachable: [], report: nil}
+      )
+
+      assert render_eventually(view, "polled")
+      assert body(render(view)) =~ "no change", "the outcome, not silence"
+    end
+
+    test "an outage is not rendered as a clean empty result" do
+      # "nothing changed" and "I could not look" are different answers, and the
+      # second must not be tinted like a success.
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+      :telemetry.execute(
+        [:reactive_dag, :scan, :stop],
+        %{duration_us: 10, changed: 0, passes: 1},
+        %{cell: "expenses", args: %{}, unreachable: [{"archive", :timeout}], report: nil}
+      )
+
+      assert render_eventually(view, "unreachable")
+      assert body(render(view)) =~ "rdd-ran-bad", "and marked as a problem"
+    end
+
+    test "a failed poll says so rather than going quiet" do
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+      :telemetry.execute(
+        [:reactive_dag, :scan, :exception],
+        %{duration_us: 10},
+        %{cell: "expenses", args: %{}, reason: :boom}
+      )
+
+      assert render_eventually(view, "poll failed")
+    end
+
+    test "a recompute is the more specific fact, so it wins over the poll" do
+      # a cell can have both in one burst — the poll found rows AND the drain
+      # reached it. "ran · N changed" answers a different question from "polled".
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+      :telemetry.execute(
+        [:reactive_dag, :scan, :stop],
+        %{duration_us: 10, changed: 2, passes: 1},
+        %{cell: "category_health", args: %{}, unreachable: [], report: nil}
+      )
+
+      assert render_eventually(view, "polled")
+
+      edit_travel_to(31.0)
+      Frontier.mark_dirty("expenses", ["*"], "edit")
+      _ = drain()
+
+      assert render_eventually(view, "changed")
+    end
+  end
+
   describe "watching the cascade" do
     test "a row that ran shows it, with the keys it changed" do
       # driven by a real drain: the wave is the sequence of `:drain_step`s, and

@@ -93,6 +93,43 @@ defmodule ReactiveDagDashboard.LiveUpdates do
   end
 
   @doc """
+  Note that `cell_id` was SCANNED, and what the poll found.
+
+  The trail exists so a run is visible after the fact, and a poll that found
+  nothing is the case that most needs it: it dirties nothing, so it produces no
+  `:drain_step` and would otherwise leave the page identical to one where the
+  button was never pressed.
+
+  `state` is `:running`, `:failed`, or the poll's `%{changed:, unreachable:}` —
+  which is why "nothing changed" can be rendered as an outcome rather than
+  inferred from silence.
+  """
+  @spec record_scan(Phoenix.LiveView.Socket.t(), String.t(), term()) ::
+          Phoenix.LiveView.Socket.t()
+  def record_scan(socket, cell_id, state) do
+    entry = %{scan: state, at: System.monotonic_time(:millisecond)}
+
+    socket =
+      Phoenix.Component.assign(
+        socket,
+        :activity,
+        Map.update(socket.assigns.activity, cell_id, entry, &Map.merge(&1, entry))
+      )
+
+    # A finished scan schedules the trail to expire, like a finished drain: the
+    # run you just watched is the one whose result you want to read, and a no-op
+    # scan has no drain to do it for you.
+    case state do
+      :running ->
+        Phoenix.Component.assign(socket, :draining?, true)
+
+      _ ->
+        Process.send_after(self(), :clear_trail, @trail_ms)
+        Phoenix.Component.assign(socket, :draining?, false)
+    end
+  end
+
+  @doc """
   The drain finished: stop claiming to be draining, and schedule the trail to
   expire.
 

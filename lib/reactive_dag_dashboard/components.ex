@@ -412,6 +412,15 @@ defmodule ReactiveDagDashboard.Components do
       /* token spend gets the attested hue: it is the number with money behind
          it, and it should be findable without reading the row. */
       .rdd-run-tok { color: var(--attested); font-weight: 700 }
+      /* Quieter than the total it breaks down — a supporting detail on the same
+         line, not a second headline competing with it. */
+      .rdd-run-model {
+        color: var(--faint);
+        font-size: 11px;
+        padding: 1px 5px;
+        border: 1px solid var(--rule);
+        border-radius: 3px;
+      }
       .rdd-run-calls { color: var(--faint) }
       .rdd-run-cached { color: var(--measured) }
 
@@ -916,6 +925,17 @@ defmodule ReactiveDagDashboard.Components do
             <span :if={run.tokens_in + run.tokens_out > 0} class="rdd-run-tok">
               <%= tok(run.tokens_in + run.tokens_out) %> tok
             </span>
+
+            <%!-- Per model, and only when there is more than one to tell apart —
+                  a breakdown of one model is the total again, with more to read.
+                  The "more than one" test lives in `runs/0`, which hands back an
+                  empty map in that case: `:if` alongside `:for` is evaluated per
+                  ITEM, so it cannot express "unless the whole set is trivial".
+                  Models differ in price by an order of magnitude, so this is the
+                  part a cost question actually needs. --%>
+            <span :for={{model, n} <- run.tokens_by} class="rdd-run-model">
+              <%= model_label(model) %> <%= tok(n) %>
+            </span>
             <span :if={run.llm_calls > 0} class="rdd-run-calls">
               <%= run.llm_calls %> call<%= plural(run.llm_calls) %>
             </span>
@@ -959,14 +979,41 @@ defmodule ReactiveDagDashboard.Components do
   defp plural(1), do: ""
   defp plural(_), do: "s"
 
+  # A count may be reported flat (`tokens_in: 1600`) or broken down per model
+  # (`tokens_in: %{"haiku" => 1200, "sonnet" => 400}`). Summing only numbers
+  # would silently read the second shape as ZERO — a node reporting its tokens
+  # honestly would look like a node reporting none.
   defp step_tokens(%{meta: meta}) when is_map(meta) do
     [:tokens_in, :tokens_out]
     |> Enum.map(&Map.get(meta, &1, 0))
-    |> Enum.filter(&is_number/1)
+    |> Enum.map(fn
+      n when is_number(n) -> n
+      m when is_map(m) -> m |> Map.values() |> Enum.filter(&is_number/1) |> Enum.sum()
+      _ -> 0
+    end)
     |> Enum.sum()
   end
 
   defp step_tokens(_), do: 0
+
+  # `claude-haiku-4-5` reads as "haiku" in a cost line — the vendor prefix and
+  # the version are the same on every row, so they cost width without telling
+  # anyone anything. The full id is on the step below.
+  #
+  # `:unattributed` is the bucket for a node that reported tokens without saying
+  # which model produced them. Shown, not hidden: it is a gap in the graph's own
+  # reporting, and hiding it makes the parts disagree with the total.
+  defp model_label(:unattributed), do: "unattributed"
+
+  defp model_label(model) when is_binary(model) do
+    case String.split(model, "-") do
+      ["claude", family | _] -> family
+      [_vendor, family | _] -> family
+      _ -> model
+    end
+  end
+
+  defp model_label(model), do: to_string(model)
 
   # Thousands, because a real drain spends tens of thousands and the exact digit
   # is never the question — "11.9k" answers "was this expensive" at a glance

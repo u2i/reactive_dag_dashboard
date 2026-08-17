@@ -251,11 +251,31 @@ defmodule ReactiveDagDashboard.DagLive do
         changed: Report.changed_total(report),
         tokens_in: Report.total(report, :tokens_in),
         tokens_out: Report.total(report, :tokens_out),
+        # In AND out per model. The two directions are priced differently, but
+        # one bar per model reads where two do not, and the question this
+        # answers is "which model is driving spend" rather than "what was the
+        # in/out split". That split stays on the step.
+        tokens_by: tokens_by(report),
         llm_calls: Report.total(report, :llm_calls),
         cache_hits: Report.total(report, :cache_hits),
         steps: report.steps
       }
     end
+  end
+
+  # Empty unless there are at least two models to tell apart: a breakdown of one
+  # is the total restated, and the total is already on the row. Deciding it here
+  # rather than in the template because `:if` alongside `:for` is evaluated per
+  # item and cannot say "unless the whole set is trivial".
+  defp tokens_by(report) do
+    by =
+      Map.merge(
+        Report.by(report, :tokens_in),
+        Report.by(report, :tokens_out),
+        fn _model, a, b -> a + b end
+      )
+
+    if map_size(by) > 1, do: by, else: %{}
   end
 
   # ── assembling what the page shows ──────────────────────────────────────────

@@ -29,8 +29,13 @@ defmodule ReactiveDagDashboard.DagLive do
   """
   use Phoenix.LiveView
 
+  # How many drains the log shows. The retention itself is the library's
+  # (`config :reactive_dag, insights_keep:`); this only bounds the render.
+  @log_runs 25
+
   import ReactiveDagDashboard.Components
 
+  alias ReactiveDag.Drain.Report
   alias ReactiveDag.Insights
   alias ReactiveDagDashboard.{Actions, LiveUpdates, NodeDetail, Tree}
 
@@ -231,6 +236,28 @@ defmodule ReactiveDagDashboard.DagLive do
       "scanned #{cell_id} — #{n} changed, #{length(up)} upstream(s) unreachable, " <>
         "so results are incomplete"
 
+  # One entry per DRAIN, newest first, with the roll-ups a log line wants.
+  #
+  # `Report.total/2` sums a key across steps and ignores steps that lack it, so
+  # a graph where only some ops report tokens still totals correctly rather than
+  # refusing to show a number.
+  defp runs do
+    for %{report: report, at: at} <- Insights.recent(@log_runs) do
+      %{
+        at: at,
+        cells: length(Report.cells(report)),
+        passes: report.passes,
+        duration_us: report.duration_us,
+        changed: Report.changed_total(report),
+        tokens_in: Report.total(report, :tokens_in),
+        tokens_out: Report.total(report, :tokens_out),
+        llm_calls: Report.total(report, :llm_calls),
+        cache_hits: Report.total(report, :cache_hits),
+        steps: report.steps
+      }
+    end
+  end
+
   # ── assembling what the page shows ──────────────────────────────────────────
 
   defp load(socket) do
@@ -244,6 +271,11 @@ defmodule ReactiveDagDashboard.DagLive do
     |> assign(:sources, NodeDetail.sources(plan, controls))
     |> assign(:status, Map.new(Insights.summary(plan), &{&1.id, &1}))
     |> assign(:pending, MapSet.new(Insights.pending(plan)))
+    # The drain log. Retained in ETS by `Insights.record/1`, so it is per-node
+    # and does not survive a restart — which is the right trade for "what just
+    # happened" and the wrong one for an audit trail. A host wanting the latter
+    # stores reports where its runs already live; the library says so.
+    |> assign(:runs, runs())
   end
 
   defp assign_view(%{assigns: %{root: nil}} = socket) do
@@ -316,6 +348,7 @@ defmodule ReactiveDagDashboard.DagLive do
   # route; the graph answers "what is the shape of the whole thing" and draws
   # convergence once. Two questions, two renderings of one expression.
   defp view(%{"view" => "graph"}), do: :graph
+  defp view(%{"view" => "log"}), do: :log
   defp view(_), do: :tree
 
   # One place that builds a link, so a cell change cannot drop the direction and
@@ -405,7 +438,10 @@ defmodule ReactiveDagDashboard.DagLive do
         </button>
       </div>
 
-      <div :if={@root} class="rdd-bar">
+      <%!-- The tab bar is OUTSIDE the `@root` guard, because the log is not
+            node-scoped: it is a list of runs, and asking to see it should not
+            require having first chosen a cell to look at. --%>
+      <div class="rdd-bar">
         <nav class="rdd-tabs">
           <button class={["rdd-tab", @view == :tree && "on"]} phx-click="view" phx-value-to="tree">
             expression
@@ -413,20 +449,24 @@ defmodule ReactiveDagDashboard.DagLive do
           <button class={["rdd-tab", @view == :graph && "on"]} phx-click="view" phx-value-to="graph">
             graph
           </button>
+          <button class={["rdd-tab", @view == :log && "on"]} phx-click="view" phx-value-to="log">
+            log
+          </button>
         </nav>
 
-
-        <span class="rdd-routes">
+        <span :if={@root && @view != :log} class="rdd-routes">
           <%= @routes %> route<%= if @routes == 1, do: "", else: "s" %>
         </span>
       </div>
 
-      <p :if={is_nil(@root)} class="rdd-prompt">
+      <p :if={is_nil(@root) and @view != :log} class="rdd-prompt">
         Pick <%= if @direction == :upstream, do: "an output", else: "a source" %> above.
       </p>
 
+      <.log :if={@view == :log} runs={@runs} />
+
       <%!-- An isolated cell is in both lists and has a tree in neither. --%>
-      <div :if={@root && @dead_end?} class="rdd-empty">
+      <div :if={@root && @dead_end? && @view != :log} class="rdd-empty">
         <p><strong><%= @root %></strong> is not connected to anything in this graph.</p>
       </div>
 

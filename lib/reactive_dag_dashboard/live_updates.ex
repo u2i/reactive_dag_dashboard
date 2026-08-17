@@ -29,6 +29,10 @@ defmodule ReactiveDagDashboard.LiveUpdates do
   timer, so a 40-cell drain costs a handful of renders rather than forty.
   """
 
+  # How long a row keeps its "just ran" trail. Long enough to still be there
+  # when a wide drain finishes, short enough that the page settles on its own.
+  @trail_ms 12_000
+
   @live_interval_ms 30_000
   @poll_interval_ms 5_000
   @flush_ms 150
@@ -63,7 +67,53 @@ defmodule ReactiveDagDashboard.LiveUpdates do
     |> Phoenix.Component.assign(:stale_cells, MapSet.new())
     |> Phoenix.Component.assign(:flush_scheduled?, false)
     |> Phoenix.Component.assign(:last_event_at, nil)
+    # `%{cell_id => %{changed: n, at: monotonic_ms}}` — what this drain has
+    # touched so far. The tree renders a pulse from it, so the cascade is
+    # visible AS it travels rather than only in the counts it leaves behind.
+    |> Phoenix.Component.assign(:activity, %{})
+    |> Phoenix.Component.assign(:draining?, false)
   end
+
+  @doc """
+  Note that `cell_id` just recomputed, changing `changed` keys.
+
+  The drain emits a step per cell in depth order, so accumulating these IS the
+  cascade: a row that has an entry has run, and the newest entry is the wave
+  front. Timestamps are monotonic ms, since the only question asked of them is
+  "how long ago".
+  """
+  @spec record_step(Phoenix.LiveView.Socket.t(), String.t(), non_neg_integer()) ::
+          Phoenix.LiveView.Socket.t()
+  def record_step(socket, cell_id, changed) do
+    entry = %{changed: changed, at: System.monotonic_time(:millisecond)}
+
+    socket
+    |> Phoenix.Component.assign(:activity, Map.put(socket.assigns.activity, cell_id, entry))
+    |> Phoenix.Component.assign(:draining?, true)
+  end
+
+  @doc """
+  The drain finished: stop claiming to be draining, and schedule the trail to
+  expire.
+
+  The trail outlives the drain deliberately — the run you just watched is the
+  one you want to read the results of, and clearing it at `:stop` would erase
+  the answer at the moment it became useful.
+  """
+  @spec finish(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  def finish(socket) do
+    Process.send_after(self(), :clear_trail, @trail_ms)
+    Phoenix.Component.assign(socket, :draining?, false)
+  end
+
+  @doc "Drop the trail. A no-op if another drain started in the meantime."
+  @spec clear_trail(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  def clear_trail(%{assigns: %{draining?: true}} = socket), do: socket
+  def clear_trail(socket), do: Phoenix.Component.assign(socket, :activity, %{})
+
+  @doc "How long a row keeps its trail, in ms."
+  @spec trail_ms() :: pos_integer()
+  def trail_ms, do: @trail_ms
 
   defp subscribe(nil), do: false
 

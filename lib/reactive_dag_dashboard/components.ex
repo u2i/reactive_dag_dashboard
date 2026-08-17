@@ -300,6 +300,33 @@ defmodule ReactiveDagDashboard.Components do
                   align-items: center; gap: 6px }
       .rdd-op { font-family: ui-monospace, monospace; font-weight: 700; color: #9fb0c0;
                 text-transform: none; letter-spacing: 0; font-size: 10.5px }
+      /* ── watching a cascade ───────────────────────────────────────────
+         A drain emits a step per cell in depth order, so a row lighting up as
+         its step arrives IS the wave. The pulse fires once on arrival (the
+         class is new to that element, so the animation runs); the tint stays,
+         so when the drain finishes the page shows what the run touched rather
+         than reverting to a static tree.
+
+         `prefers-reduced-motion` keeps the tint and drops the flash — the
+         information is in the trail, the animation only draws the eye to it. */
+      @keyframes rdd-pulse {
+        0%   { border-color: var(--accent);
+               box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent) }
+        100% { border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+               box-shadow: 0 0 0 0 transparent }
+      }
+      .rdd-ran { border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+                 background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+                 animation: rdd-pulse 1.1s ease-out }
+      .rdd-ran-badge { font-family: ui-monospace, monospace; font-size: 9px;
+                       font-weight: 700; padding: 1px 7px; border-radius: 100px;
+                       text-transform: none; letter-spacing: 0;
+                       background: color-mix(in srgb, var(--accent) 18%, transparent);
+                       color: var(--accent) }
+      @media (prefers-reduced-motion: reduce) {
+        .rdd-ran { animation: none }
+      }
+
       /* the operation, as a link to what implements it */
       .rdd-op-link { text-decoration: none; border-bottom: 1px dotted transparent }
       .rdd-op-link:hover { color: var(--derived); border-bottom-color: var(--derived) }
@@ -422,6 +449,7 @@ defmodule ReactiveDagDashboard.Components do
   attr(:node, :map, required: true)
   attr(:status, :map, required: true)
   attr(:details, :map, required: true)
+  attr(:activity, :map, default: %{})
 
   @doc """
   The hierarchy: what a change reaches, as an EXPRESSION.
@@ -465,7 +493,7 @@ defmodule ReactiveDagDashboard.Components do
   def hierarchy(assigns) do
     ~H"""
     <div class="rdd-tree">
-      <.tree_node node={@node} status={@status} details={@details} />
+      <.tree_node node={@node} status={@status} details={@details} activity={@activity} />
     </div>
     """
   end
@@ -473,6 +501,7 @@ defmodule ReactiveDagDashboard.Components do
   attr(:node, :map, required: true)
   attr(:status, :map, required: true)
   attr(:details, :map, required: true)
+  attr(:activity, :map, default: %{})
 
   defp tree_node(assigns) do
     ~H"""
@@ -482,7 +511,7 @@ defmodule ReactiveDagDashboard.Components do
       @node.routes > 1 && "rdd-many",
       @node.closed? && "rdd-closed"
     ]}>
-      <div class="rdd-row">
+      <div class={["rdd-row", @activity[@node.id] && "rdd-ran"]}>
         <span class="rdd-lead"></span>
 
         <span
@@ -524,6 +553,14 @@ defmodule ReactiveDagDashboard.Components do
                   what tells you whether a stale count is expected. --%>
             <span :if={cadence(@details[@node.id])} class="rdd-cadence">
               · <%= cadence(@details[@node.id]) %>
+            </span>
+
+            <%!-- The cascade, as it travels. A `:drain_step` arrives per cell in
+                  depth order, so a row that has an entry has RUN — and the
+                  trail outlives the drain, because the run you just watched is
+                  the one whose results you want to read. --%>
+            <span :if={@activity[@node.id]} class="rdd-ran-badge">
+              ran · <%= @activity[@node.id].changed %> changed
             </span>
 
             <span :if={@node.children > 1} class="rdd-ccount"><%= @node.children %></span>
@@ -629,7 +666,13 @@ defmodule ReactiveDagDashboard.Components do
         id={"kids-#{@node.path}"}
         class={["rdd-children", @node.closed? && "hidden"]}
       >
-        <.tree_node :for={kid <- @node.kids} node={kid} status={@status} details={@details} />
+        <.tree_node
+        :for={kid <- @node.kids}
+        node={kid}
+        status={@status}
+        details={@details}
+        activity={@activity}
+      />
       </div>
     </div>
     """

@@ -400,6 +400,108 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     end
   end
 
+  describe "the drain log" do
+    test "a run appears with its cells, timing and changed count" do
+      # Driven by a real drain and a real `Insights.record/1`, so the report
+      # shape is the library's rather than a fixture's idea of it.
+      edit_travel_to(77.0)
+      Frontier.mark_dirty("expenses", ["*"], "edit")
+      {:ok, report} = drain()
+      ReactiveDag.Insights.record(report)
+
+      {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
+
+      assert html =~ "rdd-run"
+      assert html =~ "cell", "how many cells it touched"
+      assert html =~ "changed"
+    end
+
+    test "the log is reachable with no cell selected" do
+      # A run is not a property of a node, so asking to see the log must not
+      # require having first chosen one to look at.
+      {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
+
+      refute html =~ "Pick a source above"
+    end
+
+    test "it says so when nothing has run yet" do
+      ReactiveDag.Insights.forget_reports()
+
+      {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
+
+      assert html =~ "No drains recorded yet"
+    end
+
+    test "token spend is rolled up from step meta, when a strategy reports it" do
+      # `Report.total/2` sums a key across steps and ignores steps lacking it —
+      # so a graph where only the LLM ops report tokens still totals correctly.
+      report = %ReactiveDag.Drain.Report{
+        passes: 1,
+        duration_us: 1_800_000,
+        steps: [
+          %{
+            cell: "agenda_items",
+            pass: 1,
+            claimed: ["a", "b"],
+            changed: ["a"],
+            triggered_by: "meeting_docs",
+            duration_us: 1_200_000,
+            op: :map,
+            meta: %{tokens_in: 11_402, tokens_out: 512, llm_calls: 3, cache_hits: 111}
+          },
+          # no meta at all: the arithmetic node next to it
+          %{
+            cell: "meeting_shell",
+            pass: 1,
+            claimed: ["a"],
+            changed: [],
+            triggered_by: "meeting_docs",
+            duration_us: 400_000,
+            op: :union,
+            meta: %{}
+          }
+        ]
+      }
+
+      ReactiveDag.Insights.forget_reports()
+      ReactiveDag.Insights.record(report)
+
+      {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
+
+      assert html =~ "11.9k tok", "the sum, in thousands"
+      assert html =~ "3 call"
+      assert html =~ "111 cached"
+      assert html =~ "1.8s", "and the wall clock, which does not correlate with tokens"
+    end
+
+    test "steps carry their own timing, so a slow cell is findable" do
+      report = %ReactiveDag.Drain.Report{
+        passes: 1,
+        duration_us: 1_000_000,
+        steps: [
+          %{
+            cell: "slow_one",
+            pass: 1,
+            claimed: ["a"],
+            changed: ["a"],
+            triggered_by: nil,
+            duration_us: 950_000,
+            op: :map,
+            meta: %{}
+          }
+        ]
+      }
+
+      ReactiveDag.Insights.forget_reports()
+      ReactiveDag.Insights.record(report)
+
+      {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
+
+      assert html =~ "slow_one"
+      assert html =~ "950.0ms"
+    end
+  end
+
   describe "watching the cascade" do
     test "a row that ran shows it, with the keys it changed" do
       # driven by a real drain: the wave is the sequence of `:drain_step`s, and

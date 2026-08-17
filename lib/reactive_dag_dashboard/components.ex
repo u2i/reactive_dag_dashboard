@@ -394,6 +394,39 @@ defmodule ReactiveDagDashboard.Components do
       .rdd-children { margin-left: var(--indent); padding-left: 16px;
                       border-left: 1px dashed #283341 }
 
+      /* ── the drain log ─────────────────────────────────────────────────
+         A run is a row; its steps nest under it. Tabular rather than the
+         expression tree's cards: these are records to compare down a column,
+         not a structure to read. */
+      .rdd-log { max-width: 1080px }
+      .rdd-run { border: 1px solid var(--border); border-radius: 9px;
+                 background: var(--panel); margin-bottom: 6px; overflow: hidden }
+      .rdd-run-head { display: flex; align-items: center; gap: 12px;
+                      padding: 9px 12px; cursor: pointer;
+                      font-family: ui-monospace, monospace; font-size: 11.5px }
+      .rdd-run-head:hover { background: var(--panel2) }
+      .rdd-run-at { color: var(--ink); font-weight: 700 }
+      .rdd-run-sum { color: var(--dim) }
+      .rdd-run-cost { margin-left: auto; display: flex; gap: 10px; align-items: center }
+      .rdd-run-ms { color: var(--dim); font-variant-numeric: tabular-nums }
+      /* token spend gets the attested hue: it is the number with money behind
+         it, and it should be findable without reading the row. */
+      .rdd-run-tok { color: var(--attested); font-weight: 700 }
+      .rdd-run-calls { color: var(--faint) }
+      .rdd-run-cached { color: var(--measured) }
+
+      .rdd-run-steps { border-top: 1px solid var(--border); background: var(--bg) }
+      .rdd-step { display: flex; align-items: center; gap: 12px; padding: 6px 12px 6px 34px;
+                  font-family: ui-monospace, monospace; font-size: 11px;
+                  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent) }
+      .rdd-step:last-child { border-bottom: 0 }
+      .rdd-step-cell { color: #cdd6df; font-weight: 600; min-width: 15ch }
+      .rdd-step-op { color: #9fb0c0; min-width: 9ch }
+      .rdd-step-keys { color: var(--faint); font-variant-numeric: tabular-nums }
+      .rdd-step-changed { color: var(--accent) }
+      .rdd-step-cause { color: var(--faint) }
+      .rdd-step-cost { margin-left: auto; display: flex; gap: 10px }
+
       /* ── the node panel ────────────────────────────────────────────── */
       .rdd-card { border: 1px solid var(--border); border-radius: 9px; background: var(--panel);
                   padding: 15px 17px; margin-top: 20px; max-width: 1080px }
@@ -837,6 +870,113 @@ defmodule ReactiveDagDashboard.Components do
 
   defp application(row), do: ReactiveDagDashboard.Algebra.application(row.cell)
 
+  attr(:runs, :list, required: true)
+
+  @doc """
+  The drain log: one row per run, expandable to its per-cell steps.
+
+  A third view rather than something in a node's drawer, because a run is not a
+  property of a node. "What did the 13:04 drain do" spans cells, and the drawer
+  can only ever answer "what has this cell done lately" — which is the question
+  you have AFTER this one narrows it down.
+
+  Wall time and token spend side by side, because they are the two costs and they
+  do not correlate: a cell can be slow because an LLM call was slow, or slow
+  because it claimed 700 keys and did arithmetic on all of them. Only the pair
+  distinguishes those.
+
+  ## Retention
+
+  `Insights.recent/1` reads ETS, so this is per-node and empties on restart. That
+  is the honest trade for "what just happened" and the wrong one for an audit
+  trail — the library is explicit that a host wanting durability records reports
+  where its runs already live.
+  """
+  def log(assigns) do
+    ~H"""
+    <div class="rdd-log">
+      <p :if={@runs == []} class="rdd-prompt">
+        No drains recorded yet. Runs appear here as they happen — a scan, a
+        reprocess, or a write that dirtied something.
+      </p>
+
+      <div :for={{run, i} <- Enum.with_index(@runs)} class="rdd-run">
+        <div class="rdd-run-head" phx-click={JS.toggle(to: "#run-#{i}")}>
+          <span class="rdd-chev">▸</span>
+          <span class="rdd-run-at"><%= at(run.at) %></span>
+
+          <span class="rdd-run-sum">
+            <%= run.cells %> cell<%= plural(run.cells) %>
+            · <%= run.passes %> pass<%= if run.passes == 1, do: "", else: "es" %>
+            · <%= run.changed %> changed
+          </span>
+
+          <span class="rdd-run-cost">
+            <span class="rdd-run-ms"><%= ms(run.duration_us) %></span>
+            <span :if={run.tokens_in + run.tokens_out > 0} class="rdd-run-tok">
+              <%= tok(run.tokens_in + run.tokens_out) %> tok
+            </span>
+            <span :if={run.llm_calls > 0} class="rdd-run-calls">
+              <%= run.llm_calls %> call<%= plural(run.llm_calls) %>
+            </span>
+            <span :if={run.cache_hits > 0} class="rdd-run-cached">
+              <%= run.cache_hits %> cached
+            </span>
+          </span>
+        </div>
+
+        <%!-- The steps, in the order the drain took them — which is depth order,
+              so reading down the list is reading the cascade. --%>
+        <div id={"run-#{i}"} class="rdd-run-steps hidden">
+          <div :for={step <- run.steps} class="rdd-step">
+            <span class="rdd-step-cell"><%= step.cell %></span>
+            <span class="rdd-step-op"><%= step.op %></span>
+
+            <span class="rdd-step-keys">
+              <%= length(step.claimed) %> claimed
+              <span :if={length(step.changed) > 0} class="rdd-step-changed">
+                · <%= length(step.changed) %> changed
+              </span>
+            </span>
+
+            <span :if={step.triggered_by} class="rdd-step-cause">
+              after <%= step.triggered_by %>
+            </span>
+
+            <span class="rdd-step-cost">
+              <span class="rdd-run-ms"><%= ms(step.duration_us) %></span>
+              <span :if={step_tokens(step) > 0} class="rdd-run-tok">
+                <%= tok(step_tokens(step)) %> tok
+              </span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  defp plural(1), do: ""
+  defp plural(_), do: "s"
+
+  defp step_tokens(%{meta: meta}) when is_map(meta) do
+    [:tokens_in, :tokens_out]
+    |> Enum.map(&Map.get(meta, &1, 0))
+    |> Enum.filter(&is_number/1)
+    |> Enum.sum()
+  end
+
+  defp step_tokens(_), do: 0
+
+  # Thousands, because a real drain spends tens of thousands and the exact digit
+  # is never the question — "11.9k" answers "was this expensive" at a glance
+  # where "11902" has to be read.
+  defp tok(n) when n >= 1000, do: "#{Float.round(n / 1000, 1)}k"
+  defp tok(n), do: to_string(n)
+
+  defp at(%DateTime{} = dt), do: Calendar.strftime(dt, "%H:%M:%S")
+  defp at(_), do: "—"
+
   attr(:detail, :map, default: nil)
 
   @doc """
@@ -1217,6 +1357,16 @@ defmodule ReactiveDagDashboard.Components do
   defp short(mod) when is_atom(mod), do: mod |> Module.split() |> List.last()
   defp short(other), do: inspect(other)
 
+  # Scaled, because this now labels drains as well as single recomputes and they
+  # are three orders of magnitude apart. A 249-second crawl rendered as
+  # "249000.0ms" is a number you have to count digits in to read.
+  defp ms(us) when is_integer(us) and us >= 60_000_000 do
+    m = div(us, 60_000_000)
+    s = rem(us, 60_000_000) |> div(1_000_000)
+    "#{m}m#{String.pad_leading(to_string(s), 2, "0")}s"
+  end
+
+  defp ms(us) when is_integer(us) and us >= 1_000_000, do: "#{Float.round(us / 1_000_000, 1)}s"
   defp ms(us) when is_integer(us), do: "#{Float.round(us / 1000, 1)}ms"
   defp ms(_), do: "—"
 

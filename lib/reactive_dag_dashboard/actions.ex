@@ -16,15 +16,43 @@ defmodule ReactiveDagDashboard.Actions do
 
   require Logger
 
-  def enqueue_scan(cell_id, mode, assigns) do
+  @doc """
+  Poll one source, optionally narrowed to a declared slice.
+
+  `params` is the click's own payload, so a scan button carrying a slice
+  selection reaches `poll/1` with it. That used to be dropped: `mode` was read
+  and everything else discarded, so `scan_opts/2` could return only `[]` or the
+  declared args inverted, and a scanner able to fetch one fiscal year had no way
+  to be asked for one from this page (u2i/reactive_dag_dashboard#29).
+
+  The selection is translated by the LIBRARY — `Rows.poll_opts/2` maps the
+  column a button was rendered under to the name the scanner spells it with,
+  which are deliberately allowed to differ. Doing it here would put a
+  translation table in the dashboard, where it would drift from the DSL that
+  declares it.
+  """
+  def enqueue_scan(cell_id, mode, params, assigns) do
     case assigns.controls[cell_id] do
       nil ->
         :no_scanner
 
       control ->
-        run_scan(cell_id, scan_opts(mode, control), assigns)
+        opts = Keyword.merge(scan_opts(mode, control), slice_opts(assigns, cell_id, params))
+        run_scan(cell_id, opts, assigns)
     end
   end
+
+  # A slice selection, in the scanner's own vocabulary — or nothing, when the
+  # click carried none. `poll_opts/2` ignores a column the node never declared,
+  # so a stale button cannot smuggle an option into `poll/1`.
+  defp slice_opts(assigns, cell_id, %{"column" => column, "value" => value}) do
+    case assigns.plan.cells[cell_id] do
+      nil -> []
+      cell -> ReactiveDag.Node.Rows.poll_opts(cell, %{column => value})
+    end
+  end
+
+  defp slice_opts(_assigns, _cell_id, _params), do: []
 
   # Queue it when the library's worker is available — a crawl can take minutes,
   # and a synchronous poll would block this LiveView process, so the page would
@@ -158,6 +186,18 @@ defmodule ReactiveDagDashboard.Actions do
   def describe(cell_id, %{"column" => c, "value" => v}), do: "#{cell_id} (#{c} = #{v})"
 
   def describe(cell_id, _params), do: "#{cell_id} (whole cell)"
+
+  @doc """
+  What a scan was asked for — the cell, and the slice when one was selected.
+
+  Separate from `describe/2` because the unnarrowed cases differ: a reprocess
+  with no slice really is "the whole cell", while a poll with no slice is just a
+  scan of the source and saying "whole cell" about a crawl reads as a claim
+  about rows it has not fetched yet.
+  """
+  def describe_scan(cell_id, %{"column" => c, "value" => v}), do: "#{cell_id} (#{c} = #{v})"
+
+  def describe_scan(cell_id, _params), do: cell_id
 
   # `changed` alone cannot distinguish "nothing needed redoing" from "the request
   # never reached the rows". Saying how many were freed to re-run alongside how

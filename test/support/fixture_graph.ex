@@ -45,7 +45,11 @@ defmodule ReactiveDagDashboard.FixtureGraph do
     reactive do
       id(:expenses)
       leaf?(true)
-      slice(:fiscal_year, values: ["FY24", "FY25"])
+
+      # `poll_as:` DIFFERS from the column on purpose: a scanner's option is its
+      # own vocabulary, and a fixture where the two agree could not tell a
+      # working translation from no translation at all
+      slice(:fiscal_year, values: ["FY24", "FY25"], poll_as: :fiscal)
 
       poll(ReactiveDagDashboard.FixtureGraph.ExpenseScan,
         args: [recent: true],

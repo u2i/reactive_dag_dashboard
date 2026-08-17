@@ -133,6 +133,105 @@ defmodule ReactiveDagDashboard.ScanControlTest do
     end
   end
 
+  describe "scanning ONE SLICE — asking the source for part of its upstream" do
+    test "the selected slice reaches poll/1 under the SCANNER's name" do
+      # the gap this closes: a slice could be reprocessed but never SCANNED, so
+      # a crawler able to fetch one fiscal year had no way to be asked for one
+      # from this page (#29). The fixture spells it `fiscal:` while the column
+      # is `fiscal_year`, so this fails if the translation is skipped.
+      {view, _} = drawer("expenses")
+
+      render_click(view, "scan", %{
+        "cell" => "expenses",
+        "mode" => "default",
+        "column" => "fiscal_year",
+        "value" => "FY25"
+      })
+
+      assert [opts] = FixtureGraph.ExpenseScan.polls()
+      assert opts[:fiscal] == "FY25"
+      refute opts[:fiscal_year], "the column name is the UI's, not the scanner's"
+    end
+
+    test "and the declared args still travel with it" do
+      # narrowing to a slice must not silently drop the standing `recent: true`
+      {view, _} = drawer("expenses")
+
+      render_click(view, "scan", %{
+        "cell" => "expenses",
+        "mode" => "default",
+        "column" => "fiscal_year",
+        "value" => "FY25"
+      })
+
+      assert [opts] = FixtureGraph.ExpenseScan.polls()
+      assert opts[:recent] == true
+    end
+
+    test "a scan with no slice is unchanged" do
+      {view, _} = drawer("expenses")
+
+      render_click(view, "scan", %{"cell" => "expenses", "mode" => "default"})
+
+      assert [opts] = FixtureGraph.ExpenseScan.polls()
+      refute Keyword.has_key?(opts, :fiscal), "nothing was selected, so nothing is narrowed"
+    end
+
+    test "a column the node never declared as a slice is ignored" do
+      # the library drops it rather than passing it through: an unrecognised
+      # option would otherwise reach `poll/1` looking like one the node offered
+      {view, _} = drawer("expenses")
+
+      render_click(view, "scan", %{
+        "cell" => "expenses",
+        "mode" => "default",
+        "column" => "nonsense",
+        "value" => "x"
+      })
+
+      assert [opts] = FixtureGraph.ExpenseScan.polls()
+      refute Keyword.has_key?(opts, :nonsense)
+    end
+
+    test "the scanner block offers a button per slice value" do
+      # asserted on the MARKUP, because `render_click` sends the event whether
+      # or not anything on the page emits it — so a handler test alone would
+      # pass against a page with no buttons
+      {_view, html} = drawer("expenses")
+
+      assert html =~ ~s|phx-value-column="fiscal_year"|
+      assert html =~ "just fiscal_year"
+    end
+
+    test "the message says WHAT was scanned, not just that it was" do
+      # "scanned expenses" for a one-year poll reads as a full crawl that
+      # happened to be fast
+      {view, _} = drawer("expenses")
+
+      html =
+        render_click(view, "scan", %{
+          "cell" => "expenses",
+          "mode" => "default",
+          "column" => "fiscal_year",
+          "value" => "FY25"
+        })
+
+      assert scan_message(html) =~ "fiscal_year = FY25"
+    end
+
+    test "an unnarrowed scan is not described as a whole cell" do
+      # `describe/2`'s wording belongs to reprocess: a poll with no slice is
+      # just a scan of the source, and "whole cell" claims something about rows
+      # it has not fetched yet
+      {view, _} = drawer("expenses")
+
+      html = render_click(view, "scan", %{"cell" => "expenses", "mode" => "default"})
+
+      assert scan_message(html) =~ "scanned expenses"
+      refute scan_message(html) =~ "whole cell"
+    end
+  end
+
   describe "reporting what a scan did" do
     test "a scanner without detail falls back to a count" do
       {view, _} = drawer("expenses")

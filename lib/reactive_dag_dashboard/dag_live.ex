@@ -84,19 +84,23 @@ defmodule ReactiveDagDashboard.DagLive do
   def handle_event("scan", %{"cell" => cell_id} = params, socket) do
     mode = Map.get(params, "mode", "default")
 
+    # what was ASKED for, so a narrowed poll does not report as a whole crawl —
+    # "scanned agenda_center (fiscal_year = FY25/26): 3 new" is the difference
+    # between a fast targeted fetch and a suspiciously quick full one
+    scope = Actions.describe_scan(cell_id, params)
+
     {message, reload?} =
-      case Actions.enqueue_scan(cell_id, mode, socket.assigns) do
+      case Actions.enqueue_scan(cell_id, mode, params, socket.assigns) do
         :queued ->
-          {"scan of #{cell_id} queued — results appear as it drains", false}
+          {"scan of #{scope} queued — results appear as it drains", false}
 
         {:ran, %{unreachable: []} = result} ->
-          {"scanned #{cell_id}: #{Actions.summarise(result)}#{Actions.across_leaves(result)}",
-           true}
+          {"scanned #{scope}: #{Actions.summarise(result)}#{Actions.across_leaves(result)}", true}
 
         # An outage is not a quiet success. A scan that could not look must not
         # render as a scan that found nothing.
         {:ran, %{unreachable: up} = result} ->
-          {"scanned #{cell_id}: #{Actions.summarise(result)}, #{length(up)} upstream(s) " <>
+          {"scanned #{scope}: #{Actions.summarise(result)}, #{length(up)} upstream(s) " <>
              "unreachable — results are incomplete", true}
 
         :no_scanner ->

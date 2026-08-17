@@ -42,6 +42,24 @@ defmodule ReactiveDagDashboard.Layouts do
   A host mounting inside its own authenticated scope usually wants its own
   chrome instead — a nav bar, a user menu. Pass `:root_layout` to
   `reactive_dag_dashboard/2` and this layout is never used.
+
+  ## What a `:root_layout` host still gets
+
+  Everything the page needs. The component styles — the expression tree's cards
+  and kind spines, the SVG graph's fills and strokes — are rendered by the PAGE
+  (`ReactiveDagDashboard.Components.styles/1`), not from this file, so replacing
+  this layout cannot drop them.
+
+  It could, once. Those rules lived in this module's `<style>` block, and a host
+  supplying its own chrome silently lost every one of them: the page kept its
+  daisyUI classes so it still looked styled, while the tree lost its structure
+  and the graph drew nothing at all. The failure was invisible from here and
+  undiagnosable from there.
+
+  What a host DOES take on by overriding: linking a daisyUI stylesheet, and
+  loading JS that connects a LiveSocket. `css_path`/`js_path` configure this
+  layout only — a host with its own `<head>` wires those up itself, and the
+  missing-config warning below is correctly silent for them.
   """
   use Phoenix.Component
 
@@ -109,94 +127,12 @@ defmodule ReactiveDagDashboard.Layouts do
         <link :if={css_path()} phx-track-static rel="stylesheet" href={css_path()} />
         <script :if={js_path()} defer phx-track-static type="text/javascript" src={js_path()}>
         </script>
-        <style>
-          /* The SVG graph.
-
-             `currentColor` throughout, and NO daisyUI colour tokens: v5 moved
-             them to OKLCH values that already include the colour function, so
-             the v4 `hsl(var(--b1))` spelling silently produces an invalid fill
-             and SVG falls back to BLACK — which is what the first version of
-             this drew, solid black boxes swallowing their own labels.
-             `currentColor` inherits whatever the theme set on the container and
-             cannot be wrong. */
-          .rdd-graph { color: inherit }
-
-          /* a VALUE — rows that exist. Rounded, outlined, transparent. */
-          .rdd-gbox { fill: none; stroke: currentColor; stroke-opacity: .3; cursor: pointer }
-          .rdd-gbox:hover { stroke-opacity: .75 }
-          .rdd-gbox-on { stroke-opacity: 1; stroke-width: 2 }
-
-          /* an OPERATION — a rotated square. One shape for every operator: the
-             flavour is the label beside it, not the geometry. */
-          .rdd-gop { fill: none; stroke: currentColor; stroke-opacity: .45; cursor: pointer }
-          .rdd-gop:hover { stroke-opacity: .9 }
-          .rdd-gop-on { stroke-opacity: 1; stroke-width: 2 }
-
-          /* a set, not a single row — the stacked-card glyph */
-          .rdd-gstack { fill: none; stroke: currentColor; stroke-opacity: .15 }
-
-          .rdd-edge { stroke: currentColor; stroke-width: 1.2; opacity: .3; fill: none }
-          .rdd-edge-hot { opacity: .95; stroke-width: 2 }
-
-          .rdd-gtext { font-size: 11.5px; font-weight: 500; fill: currentColor }
-          .rdd-gsub { font-size: 9.5px; fill: currentColor; opacity: .55;
-                      font-variant-numeric: tabular-nums }
-          .rdd-goplabel { font-size: 9.5px; fill: currentColor; opacity: .7;
-                          font-family: ui-monospace, monospace }
-          .rdd-gband { font-size: 9px; fill: currentColor; opacity: .35;
-                       letter-spacing: .08em; text-transform: uppercase }
-          .rdd-gbandline { stroke: currentColor; opacity: .1; stroke-width: 1 }
-
-          /* ── the expression tree ────────────────────────────────────────
-
-             A node is a bordered CARD, not an indented row: containment reads
-             as structure where a margin does not, and a subtree becomes a
-             visible region of the page. `currentColor` again throughout, for
-             the same reason the SVG uses it — daisyUI v5 tokens are OKLCH and
-             the v4 spelling silently resolves to black. */
-          /* The stacked-card glyph needs an OPAQUE ground between its layers,
-             or the four shadows composite into one smear. daisyUI v5 exposes
-             the base colour as a plain custom property holding a complete
-             colour value — used bare, never wrapped in hsl(), which is the v4
-             spelling that resolves to nothing. The fallback keeps the glyph
-             legible on a host that themes differently. */
-          .rdd-tree { --rdd-indent: 26px; --rdd-ground: var(--color-base-100, Canvas) }
-
-          .rdd-row {
-            display: flex; align-items: baseline; gap: .5rem;
-            position: relative; overflow: hidden;
-            padding: 7px 11px; margin-bottom: 4px;
-            border: 1px solid currentColor; border-color: color-mix(in oklab, currentColor 18%, transparent);
-            border-radius: 9px;
-            background: var(--rdd-panel, transparent);
-          }
-          .rdd-row:hover { border-color: color-mix(in oklab, currentColor 38%, transparent) }
-          .rdd-on { border-color: color-mix(in oklab, currentColor 65%, transparent);
-                    background: color-mix(in oklab, currentColor 7%, transparent) }
-
-          /* the kind spine: where data ENTERS, where it is COMBINED, where it
-             is merely carried. Three, because the library has three. */
-          .rdd-lead { position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
-                      border-radius: 9px 0 0 9px }
-          .rdd-lead-source { background: color-mix(in oklab, currentColor 55%, transparent) }
-          .rdd-lead-join   { background: color-mix(in oklab, currentColor 40%, transparent) }
-          .rdd-lead-derive { background: color-mix(in oklab, currentColor 22%, transparent) }
-          .rdd-lead-plain  { background: color-mix(in oklab, currentColor 12%, transparent) }
-
-          /* a set, not a single row — the stacked-card glyph, matching the SVG.
-             Drawn with borders rather than a shadow so it reads on either
-             theme without a colour that only works on one ground. */
-          .rdd-many {
-            box-shadow:
-              3px 3px 0 0 var(--rdd-ground, transparent),
-              4px 4px 0 0 color-mix(in oklab, currentColor 18%, transparent),
-              6px 6px 0 0 var(--rdd-ground, transparent),
-              7px 7px 0 0 color-mix(in oklab, currentColor 18%, transparent);
-            margin-bottom: 12px;
-          }
-
-          .rotate-90 { transform: rotate(90deg) }
-        </style>
+        <%!-- No component styles here. They live with the COMPONENTS and are
+              rendered by the page itself, so they survive a host supplying its
+              own `root_layout:` — which the docs recommend and which used to
+              drop every rule silently. Repeating them here would be a second
+              copy to keep in step for no gain: the page carries them into this
+              layout too. See `ReactiveDagDashboard.Components.styles/1`. --%>
       </head>
       <body>
         <div :if={missing()} class="alert alert-warning m-4" role="alert">

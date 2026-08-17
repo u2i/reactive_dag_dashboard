@@ -222,5 +222,49 @@ defmodule ReactiveDagDashboard.LayoutTest do
 
       assert html =~ "expression"
     end
+
+    test "the component styles survive the override" do
+      # THE BUG: these rules lived only in this library's `Layouts.root/1`, so a
+      # host passing `root_layout:` — which the docs recommend — silently lost
+      # every one of them. The page kept its daisyUI classes and still looked
+      # styled, while the expression tree lost its cards and spines and the SVG
+      # rendered with no fills or strokes at all. Diagnosing that means knowing
+      # the CSS lived in a layout you replaced.
+      #
+      # Asserted on RULES, not on the presence of a <style> tag: a host layout
+      # may have one of its own, so an empty block would pass that.
+      {:ok, _view, html} = live(build_conn(), "/admin/dag")
+
+      assert html =~ ".rdd-row", "the tree's cards"
+      assert html =~ ".rdd-lead-source", "the kind spine"
+      assert html =~ ".rdd-gbox", "the graph's boxes"
+    end
+
+    test "and they are identical to what the dashboard's own layout serves" do
+      # the two mounts must not drift into two looks — the point of moving these
+      # to the page is that there IS only one copy
+      {:ok, _view, own} = live(build_conn(), "/ops/dag")
+      {:ok, _view, host} = live(build_conn(), "/admin/dag")
+
+      assert styles_of(own) == styles_of(host)
+      refute styles_of(own) == "", "a passing comparison of two empty strings proves nothing"
+    end
+
+    test "the rules are served once, not once per layer" do
+      # the dashboard's own layout deliberately does not repeat them: the page
+      # it wraps already carries them, and a second copy is one to keep in step
+      {:ok, _view, html} = live(build_conn(), "/ops/dag")
+
+      assert length(Regex.scan(~r/\.rdd-row \{/, html)) == 1
+    end
+  end
+
+  defp styles_of(html) do
+    ~r/<style>(.*?)<\/style>/s
+    |> Regex.scan(html, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.filter(&(&1 =~ ".rdd-"))
+    |> Enum.join()
+    |> String.trim()
   end
 end

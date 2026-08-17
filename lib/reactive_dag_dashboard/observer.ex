@@ -121,16 +121,23 @@ defmodule ReactiveDagDashboard.Observer do
     broadcast(pubsub, {:scan_started, metadata.cell})
   end
 
-  # `changed` and `unreachable` only — not the whole report. What a page needs is
-  # "did this poll find anything, and could it see everything", and a scan that
-  # found nothing must arrive as an event rather than as silence.
+  # `changed`, `unreachable` and `detail` — not the whole report. What a page
+  # needs is "did this poll find anything, could it see everything, and what did
+  # it cost", and a scan that found nothing must arrive as an event rather than
+  # as silence.
+  #
+  # `detail` is what the SCANNER reported about its own work. It matters for a
+  # crawler that calls a model — classifying each new document, say — because
+  # that spend appears in no drain step: a poll and a drain are separate phases,
+  # so this event is the only place it can reach a live page.
   def handle([:reactive_dag, :scan, :stop], measurements, metadata, %{pubsub: pubsub}) do
     broadcast(
       pubsub,
       {:scan_done, metadata.cell,
        %{
          changed: Map.get(measurements, :changed, 0),
-         unreachable: Map.get(metadata, :unreachable, [])
+         unreachable: Map.get(metadata, :unreachable, []),
+         detail: Map.get(metadata, :detail, %{})
        }}
     )
   end

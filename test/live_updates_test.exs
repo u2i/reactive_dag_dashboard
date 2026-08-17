@@ -282,6 +282,91 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert body(render(view)) =~ "rdd-ran-bad", "and marked as a problem"
     end
 
+    # A poll's own cost appears in no drain step — a scan and a drain are
+    # separate phases — so `:scan, :stop` is the only place it can reach a live
+    # page. A crawler that classifies each new document with a model spends on
+    # every poll, and without this none of it is visible anywhere.
+    test "the poll's cost is reported alongside what it found" do
+        Observer.attach(@pubsub)
+        {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+        :telemetry.execute(
+          [:reactive_dag, :scan, :stop],
+          %{duration_us: 10, changed: 2, passes: 1},
+          %{
+            cell: "expenses",
+            args: %{},
+            unreachable: [],
+            detail: %{tokens_in: %{"haiku" => 900}, tokens_out: %{"haiku" => 200}, llm_calls: 3},
+            report: nil
+          }
+        )
+
+        assert render_eventually(view, "1.1k tok")
+        assert body(render(view)) =~ "3 calls"
+      end
+
+      test "a scan that changed nothing can still have cost something" do
+        # The reason cost is a separate axis from findings: classifying a
+        # document that turns out to be unchanged costs exactly as much as one
+        # that changed, and "nothing changed" alone reads as "this was free".
+        Observer.attach(@pubsub)
+        {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+        :telemetry.execute(
+          [:reactive_dag, :scan, :stop],
+          %{duration_us: 10, changed: 0, passes: 1},
+          %{
+            cell: "expenses",
+            args: %{},
+            unreachable: [],
+            detail: %{tokens_in: 450, llm_calls: 1},
+            report: nil
+          }
+        )
+
+        assert render_eventually(view, "450 tok")
+        assert body(render(view)) =~ "nothing changed"
+      end
+
+      test "cache hits are reported even when nothing was spent" do
+        # A crawl over hundreds of documents that spent nothing BECAUSE the
+        # cache held is the change detection working, not a crawl that did
+        # nothing — and the two look identical without this.
+        Observer.attach(@pubsub)
+        {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+        :telemetry.execute(
+          [:reactive_dag, :scan, :stop],
+          %{duration_us: 10, changed: 0, passes: 1},
+          %{
+            cell: "expenses",
+            args: %{},
+            unreachable: [],
+            detail: %{cache_hits: 712, llm_calls: 0},
+            report: nil
+          }
+        )
+
+        assert render_eventually(view, "712 cached")
+      end
+
+      test "a poll that reports no detail says nothing about cost" do
+        # No reassuring "0 tok" on every plain fetch: a crawler that does not
+        # spend should not have a cost line at all.
+        Observer.attach(@pubsub)
+        {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+        :telemetry.execute(
+          [:reactive_dag, :scan, :stop],
+          %{duration_us: 10, changed: 1, passes: 1},
+          %{cell: "expenses", args: %{}, unreachable: [], detail: %{}, report: nil}
+        )
+
+        assert render_eventually(view, "1 key changed")
+      refute body(render(view)) =~ "tok"
+    end
+
     test "a failed poll says so rather than going quiet" do
       Observer.attach(@pubsub)
       {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")

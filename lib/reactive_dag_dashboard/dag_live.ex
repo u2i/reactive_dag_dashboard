@@ -188,6 +188,16 @@ defmodule ReactiveDagDashboard.DagLive do
      |> assign(:message, "scanning #{cell_id}…")}
   end
 
+  # A scanner emits per unit of work, so this arrives hundreds of times in one
+  # crawl. `record_scan/3` throttles it — see there for why dropping an
+  # intermediate count is free and dropping an OUTCOME is not.
+  def handle_info({:scan_progress, cell_id, done, total}, socket) do
+    {:noreply,
+     socket
+     |> LiveUpdates.seen_event()
+     |> LiveUpdates.record_scan(cell_id, {:progress, done, total})}
+  end
+
   def handle_info({:scan_done, cell_id, result}, socket) do
     {:noreply,
      socket

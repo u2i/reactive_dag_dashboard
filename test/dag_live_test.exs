@@ -462,25 +462,42 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       assert html =~ ~s|href="https://ex.com/|
     end
 
-    test "scan controls ride on the scannable row itself" do
+    test "the scannable row carries ONE pill, whatever the scanner offers" do
+      # it was a strip — scan, full, one per slice value — which fits a small
+      # fixture and wraps a real row, where names are longer and a source may
+      # have four fiscal years
       {:ok, _view, html} = at("#{@path}/cell/expenses")
 
       assert html =~ ~s|class="rdd-scan"|
-      assert html =~ ~s|phx-value-mode="full"|, "and the full-scan variant"
+
+      pills = Regex.scan(~r/class="rdd-mini"/, html) |> length()
+      assert pills == 1, "one control on the row, not one per option"
     end
 
-    test "including one button per slice value" do
+    test "and the options live in its menu, which costs no width" do
       {:ok, _view, html} = at("#{@path}/cell/expenses")
 
-      assert html =~ ~s|phx-value-column="fiscal_year"|
+      assert html =~ ~s|class="rdd-scanmenu hidden"|, "closed until asked for"
+      assert html =~ ~s|phx-value-mode="full"|, "the full-scan variant"
+      assert html =~ ~s|phx-value-column="fiscal_year"|, "and one per slice value"
       assert html =~ "FY25"
     end
 
-    test "a slice with no enumerable values renders no buttons" do
-      # `values:` is optional, and a label followed by nothing reads as broken
+    test "the plain scan says what it will actually do" do
+      # `args: [recent: true]` is the difference between a cheap pass and a
+      # full crawl, and the menu is where there is room to say so
       {:ok, _view, html} = at("#{@path}/cell/expenses")
 
-      refute markup(html) =~ ~s|rdd-mini-slice"></button>|
+      assert html =~ "recent: true"
+    end
+
+    test "the menu is keyed by PATH, so one occurrence opens alone" do
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      ids = Regex.scan(~r/id="(scan-[^"]+)"/, html, capture: :all_but_first) |> List.flatten()
+
+      assert ids != []
+      assert length(ids) == length(Enum.uniq(ids)), "no duplicate DOM ids"
     end
 
     test "and a row with no scanner carries none of it" do

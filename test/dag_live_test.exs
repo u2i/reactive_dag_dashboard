@@ -478,9 +478,42 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       {:ok, _view, html} = at("#{@path}/cell/expenses")
 
       assert html =~ ~s|class="rdd-scanmenu hidden"|, "closed until asked for"
-      assert html =~ ~s|phx-value-mode="full"|, "the full-scan variant"
-      assert html =~ ~s|phx-value-column="fiscal_year"|, "and one per slice value"
+      assert html =~ "full scan", "the full-scan variant"
+      assert html =~ "just fiscal_year", "and the slice group"
       assert html =~ "FY25"
+    end
+
+    test "a menu item carries its payload IN the JS command" do
+      # THE BUG this pins: `phx-value-*` is only read when `phx-click` names the
+      # event directly. Routed through a JS command — which these are, so the
+      # menu closes on click — the attributes are ignored, and every item pushed
+      # `scan` with NO payload.
+      #
+      # It failed quietly in three different ways: the plain scan worked by
+      # accident (the handler defaults `mode`), `full scan` silently ran a
+      # default scan, and a slice click sent an EMPTY value, which the page
+      # reported verbatim as "(fiscal_year = )".
+      #
+      # Asserted on the pushed value, because the old test asserted the
+      # attributes were PRESENT — and they were. That is why this shipped.
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      # Pair by pair, not as one JSON blob: map key order is not stable, and a
+      # test that pins it fails on an unrelated change.
+      slice_button =
+        Regex.run(~r/<button class="rdd-scanitem rdd-scanitem-slice"[^>]*FY25[^>]*>/, html) ||
+          Regex.run(~r/<button class="rdd-scanitem rdd-scanitem-slice"[^>]*>/, html)
+
+      assert slice_button, "no slice item in the menu"
+      [button] = slice_button
+
+      assert button =~ "&quot;event&quot;:&quot;scan&quot;", "it pushes scan"
+      assert button =~ "&quot;cell&quot;:&quot;expenses&quot;", "with the cell"
+      assert button =~ "&quot;column&quot;:&quot;fiscal_year&quot;", "the slice column"
+      assert button =~ ~r/&quot;value&quot;:&quot;FY2[45]&quot;/, "and a real VALUE"
+
+      # and the full-scan item carries its mode the same way
+      assert html =~ "&quot;mode&quot;:&quot;full&quot;"
     end
 
     test "the plain scan says what it will actually do" do

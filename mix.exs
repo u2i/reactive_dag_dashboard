@@ -62,11 +62,15 @@ defmodule ReactiveDagDashboard.MixProject do
       # It was `== 0.17.0-rc.N` on the belief that `~>` could not match a
       # pre-release at all. That is not so, and the exact pin meant a PR here per
       # library release even when nothing in this dashboard cared.
-      # rc.27 for `Source.progress/3`. The floor is not cosmetic: the Observer
+      # rc.29 for `Report.by/2`, which the log's per-model token line calls. The
+      # floor is not cosmetic here either: an older library has no `by/2` at
+      # all, so the page raises rather than quietly dropping the breakdown.
+      #
+      # (rc.27 was the previous floor, for `Source.progress/3` — the Observer
       # bridges `[:reactive_dag, :scan, :progress]`, and against rc.26 the
-      # fixture scanner cannot emit it — so the tests passed on hand-fired
-      # telemetry while the real path was untested.
-      {:reactive_dag, "~> 0.17.0-rc.27"},
+      # fixture scanner could not emit it, so the tests passed on hand-fired
+      # telemetry while the real path went untested.)
+      {:reactive_dag, "~> 0.17.0-rc.29"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

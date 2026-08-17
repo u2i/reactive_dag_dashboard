@@ -474,6 +474,99 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert html =~ "1.8s", "and the wall clock, which does not correlate with tokens"
     end
 
+    test "tokens are broken down per model when a step reports them that way" do
+      # The cost question a single number cannot answer: models differ in price
+      # by an order of magnitude, so "which model spent this" is what turns a
+      # token count into a bill.
+      ReactiveDag.Insights.forget_reports()
+      ReactiveDag.Insights.record(report_with_models())
+
+      {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
+
+      # the total still reads as one number...
+      assert html =~ "4.5k tok"
+
+      # ...and the breakdown says where it went, labelled by family rather than
+      # the full model id, which is identical on every row.
+      assert html =~ "haiku"
+      assert html =~ "sonnet"
+    end
+
+    test "a single-model drain shows no breakdown — it would repeat the total" do
+      report = %ReactiveDag.Drain.Report{
+        passes: 1,
+        duration_us: 1_000,
+        steps: [
+          %{
+            cell: "a",
+            pass: 1,
+            claimed: ["k"],
+            changed: ["k"],
+            triggered_by: nil,
+            duration_us: 1_000,
+            op: :map,
+            meta: %{tokens_in: %{"claude-haiku-4-5" => 1000}}
+          }
+        ]
+      }
+
+      ReactiveDag.Insights.forget_reports()
+      ReactiveDag.Insights.record(report)
+
+      {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
+
+      assert html =~ "1.0k tok", "the total still shows"
+
+      # NB not `refute html =~ "rdd-run-model"` — the class name is also in the
+      # inlined stylesheet, so it is present whether or not anything renders.
+      # Assert on the RENDERED element instead.
+      refute html =~ ~s(class="rdd-run-model"), "a breakdown of one is noise"
+      refute html =~ "haiku", "and the model name has nothing to distinguish"
+    end
+
+    test "a step reporting the map shape counts toward its own step total" do
+      # The regression this guards: summing only numbers reads a map as ZERO, so
+      # a node reporting its tokens honestly looked like one reporting none.
+      ReactiveDag.Insights.forget_reports()
+      ReactiveDag.Insights.record(report_with_models())
+
+      {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
+
+      assert html =~ "4.5k", "the LLM step's own tokens, not 0"
+    end
+
+    defp report_with_models do
+      %ReactiveDag.Drain.Report{
+        passes: 1,
+        duration_us: 2_000_000,
+        steps: [
+          %{
+            cell: "agenda_items",
+            pass: 1,
+            claimed: ["a"],
+            changed: ["a"],
+            triggered_by: nil,
+            duration_us: 1_000_000,
+            op: :map,
+            meta: %{
+              tokens_in: %{"claude-haiku-4-5" => 3000, "claude-sonnet-4-6" => 500},
+              tokens_out: %{"claude-haiku-4-5" => 1000}
+            }
+          },
+          %{
+            cell: "meeting_shell",
+            pass: 1,
+            claimed: ["a"],
+            changed: [],
+            triggered_by: "agenda_items",
+            duration_us: 1_000_000,
+            op: :union,
+            meta: %{}
+          }
+        ]
+      }
+    end
+
     test "steps carry their own timing, so a slow cell is findable" do
       report = %ReactiveDag.Drain.Report{
         passes: 1,

@@ -271,6 +271,23 @@ defmodule ReactiveDagDashboard.Components do
               every <%= @detail.scanner.every %>
             </code>
           </div>
+
+          <div :for={slice <- @detail.slices} class="flex gap-2 items-center flex-wrap mt-2">
+            <span class="text-xs opacity-60">just <%= slice.label %></span>
+
+            <button
+              :for={value <- slice.values || []}
+              class="btn btn-xs btn-ghost"
+              phx-click="scan"
+              phx-value-cell={@detail.id}
+              phx-value-mode="default"
+              phx-value-column={slice.column}
+              phx-value-value={value}
+              title={"poll the source for #{slice.label} #{value} only"}
+            >
+              <%= value %>
+            </button>
+          </div>
         </div>
 
         <div :if={@detail.slices != []} class="border-t border-base-300 pt-3 mt-1">

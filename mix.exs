@@ -62,7 +62,7 @@ defmodule ReactiveDagDashboard.MixProject do
       # It was `== 0.17.0-rc.N` on the belief that `~>` could not match a
       # pre-release at all. That is not so, and the exact pin meant a PR here per
       # library release even when nothing in this dashboard cared.
-      {:reactive_dag, "~> 0.17.0-rc.18"},
+      {:reactive_dag, "~> 0.17.0-rc.26"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

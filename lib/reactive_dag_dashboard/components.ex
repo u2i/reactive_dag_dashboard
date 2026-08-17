@@ -597,12 +597,22 @@ defmodule ReactiveDagDashboard.Components do
                 scan ▾
               </button>
 
+              <%!-- `JS.push(value: …)`, NOT `phx-value-*`.
+                    Those attributes are only read when `phx-click` names the
+                    event directly; routed through a JS command they are ignored,
+                    so every item in this menu pushed `scan` with NO payload. The
+                    plain scan still worked by accident (the handler defaults
+                    `mode`), `full scan` silently ran a default scan, and a slice
+                    click sent `fiscal_year = ""` — which the page reported
+                    verbatim as "(fiscal_year = )" and the crawler took as no
+                    window at all. --%>
               <div id={"scan-#{@node.path}"} class="rdd-scanmenu hidden">
                 <button
                   class="rdd-scanitem"
-                  phx-click={JS.hide(to: "#scan-#{@node.path}") |> JS.push("scan")}
-                  phx-value-cell={@node.id}
-                  phx-value-mode="default"
+                  phx-click={
+                    JS.hide(to: "#scan-#{@node.path}")
+                    |> JS.push("scan", value: %{cell: @node.id, mode: "default"})
+                  }
                 >
                   scan
                   <span class="rdd-scanhint">
@@ -613,9 +623,10 @@ defmodule ReactiveDagDashboard.Components do
                 <button
                   :if={scanner(@details[@node.id]).args != []}
                   class="rdd-scanitem"
-                  phx-click={JS.hide(to: "#scan-#{@node.path}") |> JS.push("scan")}
-                  phx-value-cell={@node.id}
-                  phx-value-mode="full"
+                  phx-click={
+                    JS.hide(to: "#scan-#{@node.path}")
+                    |> JS.push("scan", value: %{cell: @node.id, mode: "full"})
+                  }
                 >
                   full scan
                   <span class="rdd-scanhint">ignores the declared bound</span>
@@ -628,11 +639,17 @@ defmodule ReactiveDagDashboard.Components do
                 <button
                   :for={{slice, value} <- slice_values(@details[@node.id])}
                   class="rdd-scanitem rdd-scanitem-slice"
-                  phx-click={JS.hide(to: "#scan-#{@node.path}") |> JS.push("scan")}
-                  phx-value-cell={@node.id}
-                  phx-value-mode="default"
-                  phx-value-column={slice.column}
-                  phx-value-value={value}
+                  phx-click={
+                    JS.hide(to: "#scan-#{@node.path}")
+                    |> JS.push("scan",
+                      value: %{
+                        cell: @node.id,
+                        mode: "default",
+                        column: slice.column,
+                        value: value
+                      }
+                    )
+                  }
                 >
                   <%= value %>
                 </button>

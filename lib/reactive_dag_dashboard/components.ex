@@ -308,22 +308,39 @@ defmodule ReactiveDagDashboard.Components do
       .rdd-cadence { font-family: ui-monospace, monospace; font-size: 9.5px;
                      color: var(--faint); text-transform: none; letter-spacing: 0 }
 
-      /* scan controls, inline on the ~6 rows that declare a scanner */
-      .rdd-scan { display: inline-flex; gap: 4px; align-items: center; margin-left: 2px }
+      /* The scan control: ONE fixed-width pill, whatever the scanner offers.
+         It was a strip of buttons — scan, full, one per slice value — which
+         fits a small fixture and wraps a real row, where names are longer and
+         a source may have four fiscal years. The variable part moved into a
+         menu, which costs no width. */
+      .rdd-scan { position: relative; display: inline-flex; margin-left: 2px }
       .rdd-mini { font: inherit; font-family: ui-monospace, monospace; font-size: 9px;
                   font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
-                  color: var(--measured); background: color-mix(in srgb, var(--measured) 14%, transparent);
+                  color: var(--measured);
+                  background: color-mix(in srgb, var(--measured) 14%, transparent);
                   border: 1px solid color-mix(in srgb, var(--measured) 30%, transparent);
-                  border-radius: 100px; padding: 1px 8px; cursor: pointer }
+                  border-radius: 100px; padding: 1px 9px; cursor: pointer;
+                  white-space: nowrap }
       .rdd-mini:hover { background: var(--measured); color: var(--bg);
                         border-color: var(--measured) }
-      /* a slice is a narrowing of the same act, so it reads as a variant of
-         the button beside it rather than a different control */
-      .rdd-mini-slice { color: var(--attested); text-transform: none;
-                        background: color-mix(in srgb, var(--attested) 14%, transparent);
-                        border-color: color-mix(in srgb, var(--attested) 30%, transparent) }
-      .rdd-mini-slice:hover { background: var(--attested); color: var(--bg);
-                              border-color: var(--attested) }
+
+      .rdd-scanmenu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 20;
+                      background: var(--panel); border: 1px solid var(--border);
+                      border-radius: 8px; padding: 5px; min-width: 190px;
+                      box-shadow: 0 10px 30px rgba(0,0,0,.5); text-transform: none;
+                      letter-spacing: 0 }
+      .rdd-scanitem { display: flex; flex-direction: column; gap: 1px; width: 100%;
+                      text-align: left; font: inherit; font-family: ui-monospace, monospace;
+                      font-size: 11px; color: var(--ink); background: none; border: 0;
+                      padding: 4px 8px; border-radius: 5px; cursor: pointer }
+      .rdd-scanitem:hover { background: var(--panel2); color: var(--measured) }
+      .rdd-scanhint { font-size: 9px; color: var(--faint); font-weight: 400 }
+      .rdd-scanitem-slice { color: var(--attested) }
+      .rdd-scanitem-slice:hover { color: var(--attested) }
+      .rdd-scangroup { font-size: 8.5px; text-transform: uppercase; letter-spacing: .08em;
+                       color: var(--faint); font-weight: 700; padding: 5px 8px 2px;
+                       margin-top: 3px; border-top: 1px solid var(--border);
+                       font-family: ui-monospace, monospace }
 
       .rdd-ccount { font-family: ui-monospace, monospace; font-size: 9px; background: #222a36;
                     color: var(--dim); padding: 0 6px; border-radius: 100px }
@@ -526,45 +543,63 @@ defmodule ReactiveDagDashboard.Components do
               <%= status %> <%= n %>
             </span>
 
-            <%!-- Scan controls INLINE, and only where they mean something. Six
-                  of this graph's 33 cells declare a scanner, so the cost is
-                  six rows carrying three small buttons and 27 carrying none —
-                  against a drawer you had to open to find the thing you came
-                  to press. --%>
+            <%!-- ONE pill, opening a menu. It was a strip — scan, full, and a
+                  button per slice value — which fits the fixture and breaks on
+                  a real graph: a source with four fiscal years puts six
+                  controls after a long name and wraps the row.
+
+                  The pill is fixed width whatever the scanner offers, so a row
+                  is the same shape whether it has one option or ten, and the
+                  variable part lives in a menu that costs no width at all. --%>
             <span :if={scanner(@details[@node.id])} class="rdd-scan">
               <button
                 class="rdd-mini"
-                phx-click="scan"
-                phx-value-cell={@node.id}
-                phx-value-mode="default"
-                title="poll with the declared args"
+                phx-click={toggle_scan(@node)}
+                title="poll this source"
               >
-                scan
+                scan ▾
               </button>
 
-              <button
-                :if={scanner(@details[@node.id]).args != []}
-                class="rdd-mini"
-                phx-click="scan"
-                phx-value-cell={@node.id}
-                phx-value-mode="full"
-                title="ignores the declared bound"
-              >
-                full
-              </button>
+              <div id={"scan-#{@node.path}"} class="rdd-scanmenu hidden">
+                <button
+                  class="rdd-scanitem"
+                  phx-click={JS.hide(to: "#scan-#{@node.path}") |> JS.push("scan")}
+                  phx-value-cell={@node.id}
+                  phx-value-mode="default"
+                >
+                  scan
+                  <span class="rdd-scanhint">
+                    <%= scan_hint(@details[@node.id]) %>
+                  </span>
+                </button>
 
-              <button
-                :for={{slice, value} <- slice_values(@details[@node.id])}
-                class="rdd-mini rdd-mini-slice"
-                phx-click="scan"
-                phx-value-cell={@node.id}
-                phx-value-mode="default"
-                phx-value-column={slice.column}
-                phx-value-value={value}
-                title={"poll for #{slice.label} #{value} only"}
-              >
-                <%= value %>
-              </button>
+                <button
+                  :if={scanner(@details[@node.id]).args != []}
+                  class="rdd-scanitem"
+                  phx-click={JS.hide(to: "#scan-#{@node.path}") |> JS.push("scan")}
+                  phx-value-cell={@node.id}
+                  phx-value-mode="full"
+                >
+                  full scan
+                  <span class="rdd-scanhint">ignores the declared bound</span>
+                </button>
+
+                <div :if={slice_values(@details[@node.id]) != []} class="rdd-scangroup">
+                  just <%= slice_label(@details[@node.id]) %>
+                </div>
+
+                <button
+                  :for={{slice, value} <- slice_values(@details[@node.id])}
+                  class="rdd-scanitem rdd-scanitem-slice"
+                  phx-click={JS.hide(to: "#scan-#{@node.path}") |> JS.push("scan")}
+                  phx-value-cell={@node.id}
+                  phx-value-mode="default"
+                  phx-value-column={slice.column}
+                  phx-value-value={value}
+                >
+                  <%= value %>
+                </button>
+              </div>
             </span>
           </div>
 
@@ -646,6 +681,28 @@ defmodule ReactiveDagDashboard.Components do
   # under every route that reaches it, and opening one occurrence must not open
   # the others.
   defp toggle_detail(node), do: JS.toggle(to: "#det-#{node.path}")
+
+  # Per PATH, like the detail drawer: a converging source drawn under two
+  # routes must not open both menus at once.
+  defp toggle_scan(node), do: JS.toggle(to: "#scan-#{node.path}")
+
+  # What the plain scan will actually do, in the scanner's own words. `args:
+  # [recent: true]` is the difference between a cheap pass and a full crawl,
+  # and the menu is where there is room to say so.
+  defp scan_hint(detail) do
+    case scanner(detail) do
+      %{args: []} -> "the whole source"
+      %{args: args} -> Enum.map_join(args, ", ", fn {k, v} -> "#{k}: #{inspect(v)}" end)
+      _ -> nil
+    end
+  end
+
+  defp slice_label(detail) do
+    case slice_values(detail) do
+      [{slice, _} | _] -> slice.label
+      [] -> nil
+    end
+  end
 
   # The spine's colour says what KIND of node this is before the label is read:
   # where data ENTERS the graph, where it is COMBINED, and where it is merely

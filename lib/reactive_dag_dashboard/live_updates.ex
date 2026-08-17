@@ -33,6 +33,11 @@ defmodule ReactiveDagDashboard.LiveUpdates do
   # when a wide drain finishes, short enough that the page settles on its own.
   @trail_ms 12_000
 
+  # How often a progress count reaches the browser. 250ms is fast enough that a
+  # number visibly moves and slow enough that a 700-document crawl costs a few
+  # dozen diffs rather than 700.
+  @progress_ms 250
+
   @live_interval_ms 30_000
   @poll_interval_ms 5_000
   @flush_ms 150
@@ -72,6 +77,7 @@ defmodule ReactiveDagDashboard.LiveUpdates do
     # visible AS it travels rather than only in the counts it leaves behind.
     |> Phoenix.Component.assign(:activity, %{})
     |> Phoenix.Component.assign(:draining?, false)
+    |> Phoenix.Component.assign(:progress_at, nil)
   end
 
   @doc """
@@ -106,7 +112,36 @@ defmodule ReactiveDagDashboard.LiveUpdates do
   """
   @spec record_scan(Phoenix.LiveView.Socket.t(), String.t(), term()) ::
           Phoenix.LiveView.Socket.t()
-  def record_scan(socket, cell_id, state) do
+  # PROGRESS is throttled; outcomes are not.
+  #
+  # A scanner emits per unit of work — 700 times in a real crawl — and every
+  # assign is a diff and a push to the browser. Dropping an intermediate count is
+  # free: the next one supersedes it, and the number is a progress indicator, not
+  # a fact anyone reads exactly. So progress lands at most every `@progress_ms`.
+  #
+  # A `:running`, `:failed` or finished result is never dropped: those are the
+  # events the page's honesty depends on.
+  def record_scan(socket, cell_id, {:progress, _done, _total} = state) do
+    now = System.monotonic_time(:millisecond)
+
+    # `nil` rather than 0 as the "never" case: `System.monotonic_time/1` may be
+    # NEGATIVE on the BEAM, so `now - 0` can be negative and the very first
+    # progress event would look throttled — the one event most worth showing,
+    # since it is what replaces "polling…" with a number.
+    last = socket.assigns[:progress_at]
+
+    if is_integer(last) and now - last < @progress_ms do
+      socket
+    else
+      socket
+      |> Phoenix.Component.assign(:progress_at, now)
+      |> put_scan(cell_id, state)
+    end
+  end
+
+  def record_scan(socket, cell_id, state), do: put_scan(socket, cell_id, state)
+
+  defp put_scan(socket, cell_id, state) do
     entry = %{scan: state, at: System.monotonic_time(:millisecond)}
 
     socket =
@@ -121,6 +156,11 @@ defmodule ReactiveDagDashboard.LiveUpdates do
     # scan has no drain to do it for you.
     case state do
       :running ->
+        Phoenix.Component.assign(socket, :draining?, true)
+
+      # Progress, arriving per document. No trail expiry scheduled — the poll is
+      # still going, and a `{:progress, …}` is not an outcome.
+      {:progress, _done, _total} ->
         Phoenix.Component.assign(socket, :draining?, true)
 
       _ ->

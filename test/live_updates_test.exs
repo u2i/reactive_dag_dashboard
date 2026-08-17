@@ -317,6 +317,62 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     end
   end
 
+  describe "progress from inside a poll" do
+    test "a crawl in flight shows how far it has got" do
+      # `polling…` and nothing else for minutes was the whole complaint: a crawl
+      # of 700 documents emits ONE `:scan, :stop`, and it fires when the crawl is
+      # already over.
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+      :telemetry.execute(
+        [:reactive_dag, :scan, :progress],
+        %{done: 34, total: 721},
+        %{cell: "expenses", label: "documents"}
+      )
+
+      assert render_eventually(view, "34/721")
+    end
+
+    test "a count without a total still reports — discovery has no denominator" do
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+      :telemetry.execute(
+        [:reactive_dag, :scan, :progress],
+        %{done: 12, total: nil},
+        %{cell: "expenses"}
+      )
+
+      assert render_eventually(view, "polling · 12")
+    end
+
+    test "progress is throttled, but the LAST value is not lost" do
+      # Dropping an intermediate count is free — the next supersedes it. Dropping
+      # the last one would leave the page reporting a stale number, so the
+      # OUTCOME event is never throttled and overwrites it either way.
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+      for n <- 1..40 do
+        :telemetry.execute(
+          [:reactive_dag, :scan, :progress],
+          %{done: n, total: 40},
+          %{cell: "expenses"}
+        )
+      end
+
+      :telemetry.execute(
+        [:reactive_dag, :scan, :stop],
+        %{duration_us: 10, changed: 3, passes: 1},
+        %{cell: "expenses", args: %{}, unreachable: [], report: nil}
+      )
+
+      assert render_eventually(view, "3 found"), "the outcome replaces the count"
+      refute body(render(view)) =~ "polling", "and the in-flight label is gone"
+    end
+  end
+
   describe "watching the cascade" do
     test "a row that ran shows it, with the keys it changed" do
       # driven by a real drain: the wave is the sequence of `:drain_step`s, and

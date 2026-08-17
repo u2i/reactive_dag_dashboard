@@ -789,6 +789,15 @@ defmodule ReactiveDagDashboard.Components do
   defp activity_label(%{changed: n}), do: "ran · #{n} changed"
 
   defp activity_label(%{scan: :running}), do: "polling…"
+
+  # A ratio while the total is known, a bare count while the crawl is still
+  # discovering how much there is. "34 so far" is progress; waiting for a
+  # denominator would report nothing during the discovery itself.
+  defp activity_label(%{scan: {:progress, done, total}}) when is_integer(total) and total > 0,
+    do: "polling · #{done}/#{total}"
+
+  defp activity_label(%{scan: {:progress, done, _}}), do: "polling · #{done}"
+
   defp activity_label(%{scan: :failed}), do: "poll failed"
 
   defp activity_label(%{scan: %{changed: 0, unreachable: []}}), do: "polled · no change"

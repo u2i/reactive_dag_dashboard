@@ -22,6 +22,7 @@ defmodule ReactiveDagDashboard.Observer do
       {:drain_done, report}                  when the drain finishes
       {:drain_failed, reason}                when it raised
       {:scan_started, cell_id}               a poll began
+      {:scan_progress, cell_id, done, total} a poll advanced
       {:scan_done, cell_id, result}          a poll finished, changed or not
       {:scan_failed, cell_id, reason}        it raised
 
@@ -60,7 +61,11 @@ defmodule ReactiveDagDashboard.Observer do
     # button doing nothing, which is how a working scan reads as broken.
     [:reactive_dag, :scan, :start],
     [:reactive_dag, :scan, :stop],
-    [:reactive_dag, :scan, :exception]
+    [:reactive_dag, :scan, :exception],
+    # From inside one poll. A crawl of 700 documents is otherwise a single
+    # `:stop` that fires once it is over, so the page says "polling…" for
+    # minutes and then jumps to a result.
+    [:reactive_dag, :scan, :progress]
   ]
 
   @doc "The PubSub topic drain events are broadcast on."
@@ -132,6 +137,17 @@ defmodule ReactiveDagDashboard.Observer do
 
   def handle([:reactive_dag, :scan, :exception], _measurements, metadata, %{pubsub: pubsub}) do
     broadcast(pubsub, {:scan_failed, metadata.cell, metadata.reason})
+  end
+
+  # A scanner emits this per unit of work — 700 times in a real crawl — because
+  # batching would push an arbitrary N into every scanner. Coalescing is THIS
+  # side's job: the LiveView already flushes on a 150ms timer, so those 700
+  # become a handful of renders.
+  def handle([:reactive_dag, :scan, :progress], measurements, metadata, %{pubsub: pubsub}) do
+    broadcast(
+      pubsub,
+      {:scan_progress, metadata[:cell], measurements.done, measurements[:total]}
+    )
   end
 
   defp broadcast(pubsub, message) do

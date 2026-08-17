@@ -373,6 +373,33 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     end
   end
 
+  describe "progress through the path a scan click takes" do
+    test "a scan run through the worker reports its progress" do
+      # THE GAP the hand-fired tests could not catch: those proved the Observer
+      # bridges an event, not that the event survives the path a click takes —
+      # the LiveView's own `scan` handler, `Source.refresh/3`, the scanner.
+      Observer.attach(@pubsub)
+      Phoenix.PubSub.subscribe(@pubsub, Observer.topic())
+
+      {:ok, _view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+      # through the library, exactly as the button does
+      {:ok, _} = ReactiveDag.Source.refresh(FixtureGraph.plan(), "expenses", recent: true)
+
+      assert_receive {:scan_progress, "expenses", 1, 3}
+      assert_receive {:scan_progress, "expenses", 3, 3}
+    end
+
+    test "and the page shows the count while it runs" do
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+      {:ok, _} = ReactiveDag.Source.refresh(FixtureGraph.plan(), "expenses", recent: true)
+
+      assert render_eventually(view, "polling · ")
+    end
+  end
+
   describe "watching the cascade" do
     test "a row that ran shows it, with the keys it changed" do
       # driven by a real drain: the wave is the sequence of `:drain_step`s, and

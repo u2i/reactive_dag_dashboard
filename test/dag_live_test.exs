@@ -42,48 +42,124 @@ defmodule ReactiveDagDashboard.DagLiveTest do
 
   defp at(path), do: live(build_conn(), path)
 
-  describe "sources — what feeds this graph" do
-    test "a scanner appears ONCE, however many cells it writes" do
-      # the duplicate-heading bug: a source feeding two leaves printed its
-      # origin above each of them, reading as two sources of the same name.
-      #
-      # the sources table is gone: each source is a PANEL heading, and one
-      # scanner must produce one panel however many cells it writes
+  # The MARKUP, with the inline stylesheet removed.
+  #
+  # The dashboard ships its own CSS in a `<style>` block on the page, so every
+  # class name it defines appears in the response whether or not anything
+  # renders with it — and `refute html =~ "rdd-empty"` matches the RULE and
+  # fails against perfectly correct markup. Negative assertions have to look at
+  # what was rendered, not at what could be.
+  defp markup(html), do: String.replace(html, ~r/<style>.*?<\/style>/s, "")
+
+  # Just the diagram. The picker lists every cell in the plan, so a question
+  # about what the DIAGRAM contains has to be asked of the diagram.
+  defp svg_of(html) do
+    case Regex.run(~r/<svg.*?<\/svg>/s, html) do
+      [svg] -> svg
+      nil -> ""
+    end
+  end
+
+  describe "the picker — choosing what the tree is rooted at" do
+    # The page used to render one panel per SOURCE downstream and a single
+    # panel rooted at the selection upstream. Two different gestures for one
+    # question, and upstream had no picker at all: clicking a node silently
+    # re-rooted the page, so the node you clicked vanished into the root
+    # position and its siblings disappeared.
+    #
+    # One picker over every cell, both directions.
+
+    test "offers EVERY cell, not just the two ends" do
+      # the reason this exists: half of a real graph is neither source nor
+      # sink, and none of it could be a starting point. "What feeds
+      # meeting_shell" was unanswerable from the page.
       {:ok, _view, html} = at(@path)
 
-      assert count(html, "uppercase tracking-wide opacity-60") == 2,
-             "one heading per source, not per scanned cell"
+      assert html =~ ~s|phx-value-cell="expenses"|, "a source"
+      assert html =~ ~s|phx-value-cell="category_health"|, "a derived cell"
+      assert html =~ ~s|phx-value-cell="verdict_audit"|, "an output"
     end
 
-    test "labelled by the scanner's own origin, with the cell beneath" do
+    test "grouped by position, since that is what the three kinds mean" do
       {:ok, _view, html} = at(@path)
 
-      assert html =~ "Finance export"
-      assert html =~ "expenses"
+      assert html =~ "sources"
+      assert html =~ "derived"
+      assert html =~ "outputs"
     end
 
-    test "and says what one crawl reaches" do
-      {:ok, _view, html} = at(@path)
+    test "the current root is named on the control" do
+      {:ok, _view, html} = at("#{@path}/cell/category_health")
 
-      assert html =~ "minutes, resolutions"
+      assert html =~ "rdd-pick"
+      assert html =~ "category_health"
     end
 
-    test "a cadence is shown where declared" do
-      {:ok, _view, html} = at(@path)
+    test "picking a cell re-roots the tree" do
+      {:ok, view, _} = at(@path)
 
-      assert html =~ "0 * * * *"
+      render_click(view, "select", %{"cell" => "category_health"})
+
+      assert_patched(view, "#{@path}/cell/category_health")
+    end
+
+    test "the same picker serves both directions" do
+      # the asymmetry that made clicking feel destructive: downstream had seven
+      # source panels as its index and upstream had none
+      {:ok, _view, html} = at("#{@path}/cell/verdict_audit?direction=upstream")
+
+      assert html =~ "rdd-pick"
+      assert html =~ ~s|phx-value-cell="expenses"|
+    end
+  end
+
+  describe "a dead end says so" do
+    test "a source viewed upstream explains itself rather than rendering empty" do
+      # `expenses` has no inputs, so upstream from it is one node with nothing
+      # above it. That is an answer, not an error — but an empty panel reads as
+      # broken, which is what was reported.
+      {:ok, _view, html} = at("#{@path}/cell/expenses?direction=upstream")
+
+      assert html =~ "rdd-empty"
+      assert html =~ "is a source"
+      assert html =~ "nothing in this graph feeds it"
+    end
+
+    test "and offers the direction that does have something" do
+      {:ok, view, html} = at("#{@path}/cell/expenses?direction=upstream")
+
+      assert html =~ "see what it reaches"
+
+      render_click(view, "direction", %{"to" => "downstream"})
+      assert_patched(view, "#{@path}/cell/expenses")
+    end
+
+    test "an output viewed downstream likewise" do
+      {:ok, _view, html} = at("#{@path}/cell/verdict_audit")
+
+      assert html =~ "rdd-empty"
+      assert html =~ "is an output"
+    end
+
+    test "a cell with a tree in that direction is NOT a dead end" do
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      refute markup(html) =~ "rdd-empty"
+      assert html =~ "rdd-row"
     end
   end
 
   describe "the hierarchy" do
     test "structure is drawn by indent and a collapse chevron" do
-      # the ASCII rails are gone: depth is margin, and a collapsible row carries
-      # a chevron plus a child count so a COLLAPSED row still says how much is
-      # under it
+      # depth is CONTAINMENT, not a computed margin: a node's children live in
+      # a wrapper inside it, which carries the indent and the rail. A flat list
+      # pushed right by `margin-left: depth * 26px` rendered the same
+      # information with nothing bounding a subtree.
       {:ok, _view, html} = at("#{@path}/cell/expenses")
 
-      assert html =~ "margin-left:"
+      assert html =~ "rdd-children", "children nest in a wrapper"
       assert html =~ "rdd-chev"
+      refute markup(html) =~ "margin-left:", "no arithmetic encodes depth any more"
     end
 
     test "each node names the OPERATION it performs" do
@@ -230,11 +306,15 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       # on one canvas, whatever was selected.
       {:ok, _view, html} = at("#{@path}/cell/council_portal?view=graph")
 
-      assert html =~ "council_portal"
-      assert html =~ "minutes"
+      # scoped to the SVG: the PICKER lists every cell in the plan by design,
+      # so matching the whole page would test the wrong control
+      svg = svg_of(html)
 
-      refute html =~ "all_verdicts", "not reachable from council_portal"
-      refute html =~ "category_health", "belongs to the other source's subtree"
+      assert svg =~ "council_portal"
+      assert svg =~ "minutes"
+
+      refute svg =~ "all_verdicts", "not reachable from council_portal"
+      refute svg =~ "category_health", "belongs to the other source's subtree"
     end
 
     test "an edge is drawn only when BOTH ends are on the canvas" do
@@ -293,18 +373,24 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     test "rows below depth 1 start hidden" do
       {:ok, _view, html} = at(@path)
 
-      # the toggle target and the hidden state on one node, rather than an
-      # exact class string — the class list gained `rdd-node` when rows became
-      # nested cards, and an equality assert would have failed on styling
-      assert Regex.match?(~r/class="[^"]*\brdd-kids\b[^"]*\bhidden\b/, html)
+      # From `expenses`, which is 4 deep. The default root reaches only 2
+      # levels, so nothing under it is deep enough to start collapsed — the old
+      # flat markup hid rows across all seven source panels at once, which is
+      # why this passed against any cell.
+      #
+      # The CHILDREN WRAPPER is what hides now: one element per subtree, rather
+      # than a class on every descendant row.
+      {:ok, _view, deep} = at("#{@path}/cell/expenses")
+
+      assert Regex.match?(~r/class="[^"]*\brdd-children\b[^"]*\bhidden\b/, deep)
     end
 
     test "a collapsible row carries its child count" do
       # a collapsed row with no count looks like a leaf, which is the failure
       # mode of collapsing by default
-      {:ok, _view, html} = at(@path)
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
 
-      assert html =~ "badge badge-ghost badge-xs"
+      assert html =~ "rdd-ccount"
     end
 
     test "expand and collapse are client-side, with no server round-trip" do
@@ -357,9 +443,10 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       {:ok, _view, html} = at("#{@path}?direction=upstream")
 
       # asserted on the PROPERTY, not on which sink sorts first: whatever is
-      # picked must have something above it, which a root never does. One
-      # indent step is 26px — the nesting a card at depth 1 carries.
-      assert html =~ "margin-left: 26px", "something is nested under something"
+      # picked must have something above it, which a root never does — so a
+      # children wrapper is present, and it is not a dead end.
+      assert html =~ "rdd-children", "something is nested under something"
+      refute markup(html) =~ "rdd-empty"
     end
 
     test "and a named sink shows its full depth" do
@@ -374,8 +461,9 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     test "downstream still starts at a root" do
       {:ok, _view, html} = at(@path)
 
-      # every source gets its own panel, so a root's tree is on the page
-      assert html =~ "Finance export"
+      # the default root is a source, and it has a tree rather than a dead end
+      assert html =~ "rdd-row"
+      refute markup(html) =~ "rdd-empty"
     end
   end
 

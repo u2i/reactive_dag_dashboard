@@ -148,6 +148,49 @@ defmodule ReactiveDagDashboard.Tree do
   end
 
   @doc """
+  Every cell, grouped as `[{label, [id]}]` — what a picker offers.
+
+  Three groups, because a graph has three kinds of position and they answer
+  different questions: where data ENTERS (a source, nothing feeds it), where it
+  LANDS (an output, nothing reads it), and everything between.
+
+  That middle group is why this exists rather than a list of roots and sinks.
+  In a real graph it is the largest — a 33-cell plan here has 7 sources, 10
+  outputs and **16 derived** — and a picker built only from the two ends cannot
+  root the tree at any of them. "What feeds `meeting_shell`" was unanswerable
+  from the page, and it is an ordinary question.
+
+  Empty groups are dropped, so a graph with no convergence does not render an
+  empty heading.
+  """
+  @spec groups(Plan.t()) :: [{String.t(), [String.t()]}]
+  def groups(%Plan{cells: cells} = plan) do
+    roots = roots(plan)
+    sinks = sinks(plan)
+
+    derived =
+      cells
+      |> Map.keys()
+      |> Enum.reject(&(&1 in roots or &1 in sinks))
+      |> Enum.sort()
+
+    [{"sources", roots}, {"derived", derived}, {"outputs", sinks}]
+    |> Enum.reject(fn {_label, ids} -> ids == [] end)
+  end
+
+  @doc """
+  Whether `id` has anything to show in `direction` — false at a dead end.
+
+  A source has nothing above it and an output has nothing below it, so one
+  direction of each is a single node with no tree. Rendering that as an empty
+  panel reads as broken; the page asks first, and says which way to look
+  instead.
+  """
+  @spec has_tree?(Plan.t(), String.t(), :upstream | :downstream) :: boolean()
+  def has_tree?(%Plan{} = plan, id, :upstream), do: inputs_of(plan, id) != []
+  def has_tree?(%Plan{} = plan, id, _downstream), do: parents_of(plan, id) != []
+
+  @doc """
   Flatten a tree to a depth-first list — the order it renders in, so a template
   iterates once instead of recursing.
   """
@@ -204,6 +247,63 @@ defmodule ReactiveDagDashboard.Tree do
     # source, and a shared root prefix collides in the DOM — LiveView rejects
     # duplicate ids outright.
     walk_hierarchy(tree, arrivals, plan, 0, true, [], tree.id)
+  end
+
+  @doc """
+  The same rows as `hierarchy/2`, but NESTED — each row keeps its `kids`.
+
+  `hierarchy/2` pre-walks the tree into a flat list and encodes depth as a
+  number, which a template turns back into indentation. That renders the right
+  information and loses the containment: a subtree becomes a run of rows that
+  happen to start further right, with nothing bounding it, and at four levels
+  the eye cannot tell which ancestor a row belongs to.
+
+  Keeping the structure lets the markup nest too — a children wrapper inside its
+  parent, which can carry the rail that makes a deep tree scannable. Depth stops
+  being arithmetic and becomes what it already was.
+
+  Rows carry the same fields, plus `kids` (the nested children) and `closed?`
+  (collapsed below depth 1, as before). `children` remains the COUNT, because a
+  collapsed row still has to say how much is folded under it.
+  """
+  @spec nested(Plan.t(), node_t()) :: map()
+  def nested(%Plan{} = plan, tree) do
+    arrivals =
+      tree
+      |> flatten()
+      |> Enum.reject(&(&1.cyclic? or is_nil(&1.via)))
+      |> Enum.group_by(& &1.id, & &1.via)
+      |> Map.new(fn {id, vias} -> {id, vias |> Enum.uniq() |> Enum.sort()} end)
+
+    walk_nested(tree, arrivals, plan, 0, tree.id)
+  end
+
+  defp walk_nested(node, arrivals, plan, depth, path) do
+    children = if node.cyclic?, do: [], else: node.children
+
+    kids =
+      children
+      |> Enum.with_index()
+      |> Enum.map(fn {child, i} ->
+        walk_nested(child, arrivals, plan, depth + 1, "#{path}-#{i}")
+      end)
+
+    %{
+      id: node.id,
+      cell: node.cell,
+      depth: depth,
+      via: node.via,
+      cyclic?: node.cyclic?,
+      repeat?: node.repeat? and not node.cyclic?,
+      arrivals: Map.get(arrivals, node.id, []),
+      routes: length(Map.get(arrivals, node.id, [])),
+      children: length(children),
+      # collapsed below depth 1: a 7-deep graph is unreadable fully expanded,
+      # and the top level is what someone arrives wanting to see
+      closed?: children != [] and depth >= 1,
+      kids: kids,
+      path: path
+    }
   end
 
   defp walk_hierarchy(node, arrivals, plan, depth, last?, acc, path) do

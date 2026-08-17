@@ -2,42 +2,36 @@ defmodule ReactiveDagDashboard.Layouts do
   @moduledoc """
   The dashboard's root layout.
 
-  **The host provides the CSS.** This page is built with daisyUI class names —
-  `table`, `badge`, `card`, `stat`, `tabs` — and ships none of them, so it
-  inherits the host's theme and looks like the rest of their admin rather than
-  like a bolted-on tool.
+  **The dashboard ships its own CSS.** The page is styled by
+  `ReactiveDagDashboard.Components.styles/1` — about 200 lines of ordinary,
+  `.rdd`-scoped CSS — so mounting it needs no stylesheet, no Tailwind
+  configuration and no theme.
 
-      # the host's app.css
-      @import "tailwindcss";
-      @plugin "daisyui";
-
-  That is a real requirement, not a nicety: a host without daisyUI gets an
-  unstyled page rather than a degraded one. It used to ship its own inline CSS
-  for exactly that reason — mounting never touched the host's assets — and the
-  trade was a dashboard that could never match the app around it, and a
-  hand-maintained stylesheet growing a component at a time.
+  It was built on daisyUI, so that it would inherit a host's theme and look
+  like the rest of their admin. That never worked (a design that adapts to any
+  theme commits to none) and it cost three configuration steps that each failed
+  as a plausible-looking broken page: link a stylesheet (#18), point Tailwind at
+  this dep so the classes compiled at all, and keep this layout or lose the
+  component rules (#32).
 
   ## Getting the assets onto the page
 
-  This layout links the host's compiled CSS, named in config:
+  One setting, and it is about JavaScript:
 
       config :reactive_dag_dashboard,
-        css_path: "/assets/app.css",
         js_path: "/assets/app.js"
 
-  BOTH are needed. Without the CSS the page is unstyled; without the JS the
-  LiveSocket never connects, so the page is static HTML and nothing on it is
-  clickable — and from a browser those two look the same ("the dashboard is
-  broken"), which is why they were reported as separate bugs.
+  Without it the LiveSocket never connects, so the page is static HTML and
+  nothing on it is clickable — which from a browser looks like "the dashboard
+  is broken" (u2i/reactive_dag_dashboard#21).
+
+  `css_path:` is still read and still linked, but it is now OPTIONAL — a hook
+  for a host that wants to layer a font or a colour override on top.
 
   Read at RENDER time rather than taken as an assign: `:root_layout` is a
   `{module, template}` tuple with no slot for assigns, so a root layout cannot
   be handed a value through the router. Config is the only channel that reaches
   here.
-
-  Without it the page renders unstyled — which is what shipped in the first
-  version of this: the layout tested `assigns[:css_path]`, nothing ever put it
-  there, and no option existed to (u2i/reactive_dag_dashboard#18).
 
   A host mounting inside its own authenticated scope usually wants its own
   chrome instead — a nav bar, a user menu. Pass `:root_layout` to
@@ -45,21 +39,19 @@ defmodule ReactiveDagDashboard.Layouts do
 
   ## What a `:root_layout` host still gets
 
-  Everything the page needs. The component styles — the expression tree's cards
-  and kind spines, the SVG graph's fills and strokes — are rendered by the PAGE
+  Everything. The whole stylesheet is rendered by the PAGE
   (`ReactiveDagDashboard.Components.styles/1`), not from this file, so replacing
-  this layout cannot drop them.
+  this layout cannot drop it.
 
   It could, once. Those rules lived in this module's `<style>` block, and a host
   supplying its own chrome silently lost every one of them: the page kept its
   daisyUI classes so it still looked styled, while the tree lost its structure
   and the graph drew nothing at all. The failure was invisible from here and
-  undiagnosable from there.
+  undiagnosable from there (u2i/reactive_dag_dashboard#32).
 
-  What a host DOES take on by overriding: linking a daisyUI stylesheet, and
-  loading JS that connects a LiveSocket. `css_path`/`js_path` configure this
-  layout only — a host with its own `<head>` wires those up itself, and the
-  missing-config warning below is correctly silent for them.
+  All a host takes on by overriding is loading JS that connects a LiveSocket,
+  which their shell already does — so the missing-config warning below is
+  correctly silent for them.
   """
   use Phoenix.Component
 
@@ -94,9 +86,14 @@ defmodule ReactiveDagDashboard.Layouts do
   bundles live, and inventing `/assets/app.js` would 404 for anyone whose
   layout differs. It can only be explicit about needing to be told.
   """
-  @spec missing() :: [String.t()]
+  @spec missing() :: [String.t()] | nil
   def missing do
-    [{"css_path", css_path()}, {"js_path", js_path()}]
+    # `js_path` only. `css_path` was required when the page was built from
+    # daisyUI class names it did not ship; it now ships its own CSS, so a host
+    # that sets nothing gets a styled, working page. Warning about an optional
+    # override would be crying wolf, and a warning nobody can act on is one
+    # nobody reads.
+    [{"js_path", js_path()}]
     |> Enum.reject(fn {_name, value} -> value end)
     |> Enum.map(&elem(&1, 0))
     |> case do
@@ -110,7 +107,6 @@ defmodule ReactiveDagDashboard.Layouts do
   def config_snippet do
     """
     config :reactive_dag_dashboard,
-      css_path: "/assets/app.css",
       js_path: "/assets/app.js"\
     """
   end
@@ -124,28 +120,50 @@ defmodule ReactiveDagDashboard.Layouts do
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="csrf-token" content={Phoenix.Controller.get_csrf_token()} />
         <title>reactive_dag</title>
+        <%!-- OPTIONAL now. The dashboard ships its own CSS, so this is only for
+              a host that wants to layer something on top — a font, a colour
+              override. It used to be required, and its absence rendered an
+              unstyled page. --%>
         <link :if={css_path()} phx-track-static rel="stylesheet" href={css_path()} />
         <script :if={js_path()} defer phx-track-static type="text/javascript" src={js_path()}>
         </script>
-        <%!-- No component styles here. They live with the COMPONENTS and are
+        <%!-- No page styles here. They live with the COMPONENTS and are
               rendered by the page itself, so they survive a host supplying its
               own `root_layout:` — which the docs recommend and which used to
-              drop every rule silently. Repeating them here would be a second
-              copy to keep in step for no gain: the page carries them into this
-              layout too. See `ReactiveDagDashboard.Components.styles/1`. --%>
+              drop every rule silently. See
+              `ReactiveDagDashboard.Components.styles/1`. --%>
+        <%!-- The document ground, so the page is not composited over whatever
+              the browser defaults to. Matches the palette in
+              `Components.styles/1`, including its dark variant — a light-only
+              shell around a theme-aware page is a white band above a dark one. --%>
+        <style>
+          html, body { margin: 0; padding: 0; background: #ffffff; color: #1a2027 }
+          .rdd-warn { margin: 16px; padding: 12px 16px; border: 1px solid #a86a12;
+                      border-radius: 8px; background: #fdf1de; color: #5c4a26;
+                      font: 13px/1.5 ui-sans-serif, system-ui }
+          .rdd-warn p { margin: 0 }
+          .rdd-warn p + p { margin-top: 4px }
+          .rdd-warn pre { margin: 8px 0 0; font-size: 12px }
+          @media (prefers-color-scheme: dark) {
+            html, body { background: #0e1116; color: #cdd6df }
+            .rdd-warn { border-color: #e0a93f; background: #2a2113; color: #f2c98a }
+          }
+        </style>
       </head>
       <body>
-        <div :if={missing()} class="alert alert-warning m-4" role="alert">
-          <div>
-            <p class="font-semibold">
-              reactive_dag_dashboard is missing <%= Enum.join(missing(), " and ") %>.
-            </p>
-            <p class="text-sm">
-              Without <code>js_path</code> the LiveSocket never connects, so nothing on this
-              page is clickable. Without <code>css_path</code> it renders unstyled.
-            </p>
-            <pre class="text-xs mt-2"><code><%= config_snippet() %></code></pre>
-          </div>
+        <%!-- Styled by this layout's own `<head>`, not by the page's
+              stylesheet: this warning fires when the page is missing what it
+              needs to work, so it must not depend on anything that might be
+              missing. --%>
+        <div :if={missing()} role="alert" class="rdd-warn">
+          <p style="font-weight:650">
+            reactive_dag_dashboard is missing <%= Enum.join(missing(), " and ") %>.
+          </p>
+          <p>
+            Without <code>js_path</code> the LiveSocket never connects, so nothing on this
+            page is clickable.
+          </p>
+          <pre><code><%= config_snippet() %></code></pre>
         </div>
 
         <%= @inner_content %>

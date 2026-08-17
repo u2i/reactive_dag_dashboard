@@ -1,13 +1,14 @@
 defmodule ReactiveDagDashboard.Components do
   @moduledoc """
-  The dashboard's pieces, in daisyUI.
+  The dashboard's pieces.
 
   Split out of the LiveView because the page is now one view rather than three,
   and a single 600-line `render/1` is a page nobody can change safely.
 
-  Every class here is daisyUI's — the host supplies the stylesheet, so the
-  dashboard inherits their theme rather than shipping a look that clashes with
-  the admin around it.
+  Every class here is this library's own, `rdd-` prefixed and defined in
+  `styles/1`, which the page renders. The dashboard is self-contained: no
+  framework, no host stylesheet, no build step. See `styles/1` for why that
+  replaced the daisyUI it was built on.
   """
   use Phoenix.Component
 
@@ -16,297 +17,430 @@ defmodule ReactiveDagDashboard.Components do
   alias ReactiveDagDashboard.NodeDetail
 
   @doc """
-  The component styles, as a `<style>` block the PAGE renders.
+  The dashboard's stylesheet, as a `<style>` block the PAGE renders.
 
-  These are the rules daisyUI cannot express — the expression tree's nested
-  cards and kind spines, and the SVG graph's fills and strokes. Everything else
-  on the page is a daisyUI class name the host's stylesheet already carries.
+  Everything the page needs, in about 200 lines of ordinary CSS. No framework,
+  no build step, no host stylesheet — the dashboard is self-contained.
+
+  ## Why it ships its own CSS
+
+  This was built on daisyUI, on the reasoning that inheriting the host's theme
+  would make the graph look like the rest of their admin rather than a bolted-on
+  tool. That reasoning was wrong twice over.
+
+  It did not work: cascade's dashboard shares no visual language with the rest
+  of its `/admin`, because a design that adapts to any theme commits to none.
+  And it made the page fragile in ways that had nothing to do with the graph — a
+  host had to link a stylesheet (#18), point Tailwind at this dep so the classes
+  were compiled at all, and keep this library's own root layout or lose the
+  component rules (#32). Three configuration steps, each failing as a page that
+  looked plausible and was subtly broken, none diagnosable from a browser.
+
+  Owning the CSS removes all three. The trade is that the dashboard looks like
+  itself wherever it is mounted, which is the honest description of what it was
+  doing anyway.
 
   ## Why the page and not the layout
 
-  This lived in `Layouts.root/1`, which is only rendered when a host uses the
-  dashboard's OWN layout. A host with its own chrome passes `root_layout:` —
-  which the docs actively recommend, and which silently dropped every rule
-  here: the page kept its daisyUI classes, so it still looked styled, but the
-  tree lost its cards and spines and the SVG rendered with no fills or strokes
-  at all. Diagnosing that means knowing the CSS lives in a layout you replaced.
-
-  Component styles belong with the components. Rendered from `DagLive.render/1`,
-  they arrive whatever wraps the page, and a host cannot lose them by supplying
-  its own shell.
+  A host with its own chrome passes `root_layout:` — which the docs recommend —
+  and anything kept only in this library's layout is silently dropped for them.
+  Rendered from `DagLive.render/1`, these rules arrive whatever wraps the page.
 
   A `<style>` in the body is not valid HTML by the letter of the spec, but every
-  browser honours it, and LiveView patches it like any other markup. The
-  alternative — asking hosts to import a stylesheet — is the coupling this
-  library spent its whole design avoiding.
+  browser honours it and LiveView patches it like any other markup.
 
-  Rendered in exactly one place, so there is no second copy to keep in step: the
-  dashboard's own layout deliberately does NOT repeat these rules, because the
-  page it wraps already carries them.
+  ## Scoping
+
+  Every rule is under `.rdd`, and every class is `rdd-` prefixed. A host's own
+  stylesheet is loaded on the same page and must not be able to reach in here,
+  nor these rules leak out into their nav.
+
+  ## Colour
+
+  Tokens on `.rdd`, with a `prefers-color-scheme` block redefining only the
+  tokens. Both grounds are painted explicitly — a transparent background would
+  borrow the host's, and a page that sets its own text colour on someone else's
+  ground is how white-on-white happens.
+
+  The four kind colours (source / derive / join / plain) are the one place hue
+  carries meaning rather than decoration, so they are stated rather than derived
+  from opacity ramps of one ink — which is what the daisyUI version did, and it
+  rendered all four as the same grey.
   """
   def styles(assigns) do
     ~H"""
     <style>
-      /* The SVG graph.
+      /* ── tokens ─────────────────────────────────────────────────────────
+         Light by default; the media block redefines ONLY tokens, so every
+         rule below is written once. Both grounds painted explicitly: a
+         transparent background borrows the host's, and our ink on their
+         ground is how white-on-white happens. */
+      .rdd {
+        --bg: #ffffff;
+        --panel: #fbfcfd;
+        --panel2: #f2f5f7;
+        --border: #dde3e9;
+        --ink: #1a2027;
+        --dim: #5c6b7a;
+        --faint: #8a97a4;
+        --accent: #2f6fd0;
+        --ok: #1c8a5a;
+        --ok-bg: #e6f5ee;
+        --warn: #a86a12;
+        --warn-bg: #fdf1de;
+        --source: #2f8f6f;
+        --derive: #7d8fa0;
+        --join: #b3762f;
+        --plain: #b9c2cb;
+        --rail: #dde3e9;
+        --indent: 26px;
 
-         `currentColor` throughout, and NO daisyUI colour tokens: v5 moved
-         them to OKLCH values that already include the colour function, so
-         the v4 `hsl(var(--b1))` spelling silently produces an invalid fill
-         and SVG falls back to BLACK — which is what the first version of
-         this drew, solid black boxes swallowing their own labels.
-         `currentColor` inherits whatever the theme set on the container and
-         cannot be wrong. */
-      .rdd-graph { color: inherit }
-
-      /* a VALUE — rows that exist. Rounded, outlined, transparent. */
-      .rdd-gbox { fill: none; stroke: currentColor; stroke-opacity: .3; cursor: pointer }
-      .rdd-gbox:hover { stroke-opacity: .75 }
-      .rdd-gbox-on { stroke-opacity: 1; stroke-width: 2 }
-
-      /* an OPERATION — a rotated square. One shape for every operator: the
-         flavour is the label beside it, not the geometry. */
-      .rdd-gop { fill: none; stroke: currentColor; stroke-opacity: .45; cursor: pointer }
-      .rdd-gop:hover { stroke-opacity: .9 }
-      .rdd-gop-on { stroke-opacity: 1; stroke-width: 2 }
-
-      /* a set, not a single row — the stacked-card glyph */
-      .rdd-gstack { fill: none; stroke: currentColor; stroke-opacity: .15 }
-
-      .rdd-edge { stroke: currentColor; stroke-width: 1.2; opacity: .3; fill: none }
-      .rdd-edge-hot { opacity: .95; stroke-width: 2 }
-
-      .rdd-gtext { font-size: 11.5px; font-weight: 500; fill: currentColor }
-      .rdd-gsub { font-size: 9.5px; fill: currentColor; opacity: .55;
-                  font-variant-numeric: tabular-nums }
-      .rdd-goplabel { font-size: 9.5px; fill: currentColor; opacity: .7;
-                      font-family: ui-monospace, monospace }
-      .rdd-gband { font-size: 9px; fill: currentColor; opacity: .35;
-                   letter-spacing: .08em; text-transform: uppercase }
-      .rdd-gbandline { stroke: currentColor; opacity: .1; stroke-width: 1 }
-
-      /* ── the expression tree ────────────────────────────────────────
-
-         A node is a bordered CARD, not an indented row: containment reads
-         as structure where a margin does not, and a subtree becomes a
-         visible region of the page. `currentColor` again throughout, for
-         the same reason the SVG uses it — daisyUI v5 tokens are OKLCH and
-         the v4 spelling silently resolves to black.
-
-         The stacked-card glyph needs an OPAQUE ground between its layers,
-         or the four shadows composite into one smear. daisyUI v5 exposes
-         the base colour as a plain custom property holding a complete
-         colour value — used bare, never wrapped in hsl(), which is the v4
-         spelling that resolves to nothing. The fallback keeps the glyph
-         legible on a host that themes differently. */
-      .rdd-tree { --rdd-indent: 26px; --rdd-ground: var(--color-base-100, Canvas) }
-
-      .rdd-row {
-        display: flex; align-items: baseline; gap: .5rem;
-        position: relative; overflow: hidden;
-        padding: 7px 11px; margin-bottom: 4px;
-        border: 1px solid currentColor; border-color: color-mix(in oklab, currentColor 18%, transparent);
-        border-radius: 9px;
-        background: var(--rdd-panel, transparent);
+        background: var(--bg);
+        color: var(--ink);
+        font: 13px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        padding: 24px;
+        max-width: 1080px;
+        margin: 0 auto;
       }
-      .rdd-row:hover { border-color: color-mix(in oklab, currentColor 38%, transparent) }
-      .rdd-on { border-color: color-mix(in oklab, currentColor 65%, transparent);
-                background: color-mix(in oklab, currentColor 7%, transparent) }
 
-      /* the kind spine: where data ENTERS, where it is COMBINED, where it
-         is merely carried. Three, because the library has three. */
-      .rdd-lead { position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
-                  border-radius: 9px 0 0 9px }
-      .rdd-lead-source { background: color-mix(in oklab, currentColor 55%, transparent) }
-      .rdd-lead-join   { background: color-mix(in oklab, currentColor 40%, transparent) }
-      .rdd-lead-derive { background: color-mix(in oklab, currentColor 22%, transparent) }
-      .rdd-lead-plain  { background: color-mix(in oklab, currentColor 12%, transparent) }
+      @media (prefers-color-scheme: dark) {
+        .rdd {
+          --bg: #0e1116;
+          --panel: #151b23;
+          --panel2: #1b232d;
+          --border: #283341;
+          --ink: #cdd6df;
+          --dim: #8b9aa9;
+          --faint: #6b7889;
+          --accent: #5c9dff;
+          --ok: #46d39a;
+          --ok-bg: #10261f;
+          --warn: #e0a93f;
+          --warn-bg: #2a2113;
+          --source: #5fd3bc;
+          --derive: #7c8aa0;
+          --join: #c98b5a;
+          --plain: #3a4553;
+          --rail: #283341;
+        }
+      }
+
+      .rdd * { box-sizing: border-box }
+
+      /* ── page chrome ───────────────────────────────────────────────── */
+      .rdd-head { display: flex; align-items: baseline; justify-content: space-between;
+                  margin-bottom: 14px }
+      .rdd-head h1 { font-size: 18px; font-weight: 650; margin: 0; letter-spacing: -.01em }
+
+      .rdd-alert { background: var(--panel2); border: 1px solid var(--border);
+                   border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; font-size: 12.5px }
+
+      .rdd-tabs { display: flex; gap: 2px; margin-bottom: 14px }
+      .rdd-tab { font: inherit; font-size: 12.5px; color: var(--dim); background: none;
+                 border: 0; border-bottom: 2px solid transparent; padding: 4px 10px;
+                 cursor: pointer; border-radius: 0 }
+      .rdd-tab:hover { color: var(--ink) }
+      .rdd-tab.on { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent) }
+
+      /* ── the picker bar ────────────────────────────────────────────── */
+      .rdd-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+                 margin-bottom: 14px }
+      .rdd-bar-lab { font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
+                     color: var(--faint); font-weight: 700 }
+      .rdd-bar-acts { display: flex; gap: 6px; margin-left: 8px }
+      .rdd-routes { margin-left: auto; font-size: 11.5px; color: var(--faint);
+                    font-variant-numeric: tabular-nums }
+
+      .rdd-picker { position: relative }
+      .rdd-pick { font: inherit; font-size: 13px; font-weight: 600; color: var(--ink);
+                  background: var(--panel); border: 1px solid var(--border);
+                  border-radius: 7px; padding: 4px 10px; cursor: pointer;
+                  display: inline-flex; align-items: center; gap: 8px }
+      .rdd-pick:hover { border-color: var(--accent) }
+      .rdd-caret { color: var(--faint); font-size: 10px }
+
+      .rdd-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 30;
+                  background: var(--bg); border: 1px solid var(--border);
+                  border-radius: 9px; padding: 6px; min-width: 260px;
+                  max-height: 380px; overflow-y: auto;
+                  box-shadow: 0 8px 28px rgba(0,0,0,.16) }
+      .rdd-menu-group + .rdd-menu-group { margin-top: 6px; padding-top: 6px;
+                                          border-top: 1px solid var(--border) }
+      .rdd-menu-head { font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em;
+                       color: var(--faint); font-weight: 700; padding: 3px 8px;
+                       display: flex; gap: 6px }
+      .rdd-menu-item { display: block; width: 100%; text-align: left; font: inherit;
+                       font-size: 12.5px; color: var(--ink); background: none; border: 0;
+                       padding: 4px 8px; border-radius: 5px; cursor: pointer }
+      .rdd-menu-item:hover { background: var(--panel2) }
+      .rdd-menu-item.on { background: var(--panel2); font-weight: 650; color: var(--accent) }
+
+      /* ── buttons ───────────────────────────────────────────────────── */
+      .rdd-btn { font: inherit; font-size: 11.5px; color: var(--ink); background: var(--panel);
+                 border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px;
+                 cursor: pointer }
+      .rdd-btn:hover { border-color: var(--accent); color: var(--accent) }
+      .rdd-ghost { background: none; border-color: transparent; color: var(--dim) }
+      .rdd-ghost:hover { background: var(--panel2); color: var(--ink); border-color: transparent }
+
+      .rdd-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px;
+                 overflow: hidden }
+      .rdd-segbtn { font: inherit; font-size: 11.5px; color: var(--dim); background: var(--panel);
+                    border: 0; padding: 4px 10px; cursor: pointer }
+      .rdd-segbtn + .rdd-segbtn { border-left: 1px solid var(--border) }
+      .rdd-segbtn:hover { color: var(--ink) }
+      .rdd-segbtn.on { background: var(--accent); color: #fff; font-weight: 600 }
+
+      /* ── badges ────────────────────────────────────────────────────── */
+      .rdd-badge { font-size: 9px; font-weight: 700; padding: 2px 7px; border-radius: 100px;
+                   white-space: nowrap; letter-spacing: .01em }
+      .rdd-b-ok { background: var(--ok-bg); color: var(--ok) }
+      .rdd-b-warn { background: var(--warn-bg); color: var(--warn) }
+      .rdd-b-mute { background: var(--panel2); color: var(--faint) }
+
+      /* ── the dead end ──────────────────────────────────────────────── */
+      .rdd-empty { border: 1px dashed var(--border); border-radius: 9px; padding: 18px;
+                   background: var(--panel); text-align: center; color: var(--dim) }
+      .rdd-empty p { margin: 0 0 10px }
+      .rdd-empty strong { color: var(--ink); font-weight: 650 }
+
+      .rdd-cap { font-size: 11.5px; color: var(--faint); margin: 6px 0 0 }
+      .rdd-cap code { font-family: ui-monospace, monospace; color: var(--dim) }
+
+      /* ── the expression tree ───────────────────────────────────────────
+         Nesting is REAL: a node's children live in a wrapper inside it,
+         carrying the indent and a dashed rail. Depth is containment, not a
+         computed margin, so a subtree is a bounded region of the page. */
+      .rdd-tree { --indent: 26px }
+      .rdd-node { margin: 6px 0 }
+
+      .rdd-row { display: flex; align-items: flex-start; gap: 10px;
+                 border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px;
+                 background: var(--panel); position: relative; overflow: hidden;
+                 cursor: pointer }
+      .rdd-row:hover { border-color: var(--dim) }
+      .rdd-on > .rdd-row, .rdd-row.rdd-on { border-color: var(--accent); background: var(--panel2) }
 
       /* a set, not a single row — the stacked-card glyph, matching the SVG.
-         Drawn with borders rather than a shadow so it reads on either
-         theme without a colour that only works on one ground. */
-      .rdd-many {
-        box-shadow:
-          3px 3px 0 0 var(--rdd-ground, transparent),
-          4px 4px 0 0 color-mix(in oklab, currentColor 18%, transparent),
-          6px 6px 0 0 var(--rdd-ground, transparent),
-          7px 7px 0 0 color-mix(in oklab, currentColor 18%, transparent);
-        margin-bottom: 12px;
+         The opaque --panel layers between the borders are what keep the four
+         shadows readable as separate cards rather than one smear. */
+      .rdd-many > .rdd-row {
+        box-shadow: 3px 3px 0 0 var(--panel), 4px 4px 0 0 var(--border),
+                    6px 6px 0 0 var(--panel), 7px 7px 0 0 var(--border);
       }
+      .rdd-many { margin-bottom: 12px }
 
+      /* the kind spine, bled to the card edges */
+      .rdd-lead { width: 4px; align-self: stretch; flex: 0 0 4px; margin: -9px 0 -9px -12px;
+                  border-radius: 9px 0 0 9px; background: var(--plain) }
+      .rdd-source > .rdd-row > .rdd-lead { background: var(--source) }
+      .rdd-derive > .rdd-row > .rdd-lead { background: var(--derive) }
+      .rdd-join   > .rdd-row > .rdd-lead { background: var(--join) }
+
+      .rdd-chev { font-family: ui-monospace, monospace; font-size: 10px; color: var(--faint);
+                  user-select: none; width: 10px; flex: 0 0 10px; margin-top: 3px;
+                  transition: transform .12s ease }
+      .rdd-chev-none { visibility: hidden }
       .rotate-90 { transform: rotate(90deg) }
+
+      .rdd-body { flex: 1; min-width: 0 }
+
+      /* two lines: a small uppercase KIND line, then the NAME at reading
+         weight. One baseline row put id, badges, algebra and count at the
+         same weight and nothing won. */
+      .rdd-kind { font-size: 9.5px; text-transform: uppercase; letter-spacing: .07em;
+                  color: var(--faint); font-weight: 700; display: flex; flex-wrap: wrap;
+                  align-items: center; gap: 6px }
+      .rdd-op { font-family: ui-monospace, monospace; text-transform: none;
+                letter-spacing: 0; font-weight: 500; color: var(--dim); font-size: 10.5px }
+      .rdd-ccount { background: var(--panel2); color: var(--faint); border-radius: 100px;
+                    padding: 1px 6px; font-size: 9px }
+      .rdd-grain { font-family: ui-monospace, monospace; font-size: 9px; font-weight: 700;
+                   padding: 1px 6px; border-radius: 100px; text-transform: none }
+      .rdd-grain-many { background: var(--warn-bg); color: var(--warn) }
+      .rdd-grain-one { background: var(--panel2); color: var(--faint); font-style: italic }
+
+      .rdd-name { font-size: 13.5px; font-weight: 600; margin-top: 1px; color: var(--ink) }
+      .rdd-name button { font: inherit; color: inherit; background: none; border: 0;
+                         padding: 0; cursor: pointer; text-align: left }
+      .rdd-name button:hover { color: var(--accent) }
+
+      .rdd-count { font-size: 11.5px; color: var(--faint); font-variant-numeric: tabular-nums;
+                   margin-left: auto; padding-left: 12px; flex-shrink: 0; margin-top: 2px }
+
+      .rdd-children { margin-left: var(--indent); padding-left: 16px;
+                      border-left: 1px dashed var(--rail) }
+      .rdd .hidden { display: none }
+
+      /* ── the node panel ────────────────────────────────────────────── */
+      .rdd-card { border: 1px solid var(--border); border-radius: 9px; background: var(--panel);
+                  padding: 14px 16px; margin-top: 18px }
+      .rdd-card h2 { font-size: 15px; font-weight: 650; margin: 0 }
+      .rdd-card-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+                       margin-bottom: 8px }
+      .rdd-lede { font-size: 12.5px; color: var(--dim); margin: 0 0 10px }
+      .rdd-facts { display: flex; gap: 16px; flex-wrap: wrap; font-size: 11.5px;
+                   color: var(--dim); margin-bottom: 10px }
+      .rdd-facts .k { color: var(--faint); text-transform: uppercase; font-size: 9.5px;
+                      letter-spacing: .07em; font-weight: 700; margin-right: 4px }
+      .rdd-sec { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px }
+      .rdd-sec-head { font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em;
+                      color: var(--faint); font-weight: 700; margin-bottom: 6px }
+      .rdd-row-acts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap }
+      .rdd-link { color: var(--accent); text-decoration: none; font-size: 11.5px }
+      .rdd-link:hover { text-decoration: underline }
+      .rdd-mono { font-family: ui-monospace, monospace; font-size: 11px; color: var(--dim) }
+
+      .rdd-tbl { width: 100%; border-collapse: collapse; font-size: 11.5px }
+      .rdd-tbl td { padding: 3px 8px 3px 0; color: var(--dim);
+                    font-variant-numeric: tabular-nums }
+      .rdd-tbl tr + tr td { border-top: 1px solid var(--border) }
+
+      /* ── the SVG graph ─────────────────────────────────────────────── */
+      .rdd-graph { color: var(--ink); display: block }
+      .rdd-gwrap { border: 1px solid var(--border); border-radius: 9px; background: var(--panel);
+                   padding: 8px; overflow-x: auto }
+
+      .rdd-gbox { fill: none; stroke: var(--border); stroke-width: 1.5; cursor: pointer }
+      .rdd-gbox:hover { stroke: var(--dim) }
+      .rdd-gbox-on { stroke: var(--accent); stroke-width: 2 }
+      .rdd-gstack { fill: none; stroke: var(--border); opacity: .5 }
+
+      .rdd-gop { fill: var(--panel); stroke: var(--derive); stroke-width: 1.5; cursor: pointer }
+      .rdd-gop:hover { stroke: var(--ink) }
+      .rdd-gop-on { stroke: var(--accent); stroke-width: 2 }
+
+      .rdd-edge { stroke: var(--border); stroke-width: 1.4; fill: none }
+      .rdd-edge-hot { stroke: var(--accent); stroke-width: 2 }
+
+      .rdd-gtext { font-size: 11.5px; font-weight: 600; fill: var(--ink) }
+      .rdd-gsub { font-size: 9.5px; fill: var(--faint); font-variant-numeric: tabular-nums }
+      .rdd-goplabel { font-size: 9.5px; fill: var(--dim); font-family: ui-monospace, monospace }
     </style>
     """
   end
 
-  attr(:sources, :list, required: true)
+
+  attr(:node, :map, required: true)
   attr(:status, :map, required: true)
   attr(:selected, :string, default: nil)
-
-  @doc """
-  The sources: what feeds this graph, and when it last ran.
-
-  A TABLE rather than a heading-per-source with one pill under it. Seven
-  sources took ~800px of mostly whitespace that way, and the shape hid the
-  thing worth comparing — cadence and freshness side by side, so a source that
-  has not run when it should have stands out.
-  """
-  def sources(assigns) do
-    ~H"""
-    <div class="overflow-x-auto">
-      <table class="table table-sm table-zebra">
-        <thead>
-          <tr>
-            <th>source</th>
-            <th>feeds</th>
-            <th>every</th>
-            <th class="text-right">keys</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr :for={s <- @sources} class={s.cell == @selected && "active"}>
-            <td>
-              <button
-                type="button"
-                phx-click="select"
-                phx-value-cell={s.cell}
-                class="link link-hover text-left"
-              >
-                <div class="font-medium"><%= s.origin || s.cell %></div>
-                <div :if={s.origin} class="text-xs opacity-60"><%= s.cell %></div>
-              </button>
-            </td>
-            <td class="text-xs opacity-70"><%= Enum.join(s.feeds, ", ") %></td>
-            <td>
-              <code :if={s.every} class="text-xs"><%= s.every %></code>
-              <span :if={!s.every} class="text-xs opacity-40">on demand</span>
-            </td>
-            <td class="text-right tabular-nums" title={count_title(@status[s.cell])}>
-              <%= key_count(@status[s.cell]) %>
-            </td>
-            <td class="text-right">
-              <button
-                class="btn btn-xs btn-ghost"
-                phx-click="scan"
-                phx-value-cell={s.cell}
-                phx-value-mode="default"
-              >
-                scan
-              </button>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    """
-  end
-
-  attr(:rows, :list, required: true)
-  attr(:status, :map, required: true)
-  attr(:selected, :string, default: nil)
-  attr(:plan, :map, required: true)
 
   @doc """
   The hierarchy: what a change reaches, as an EXPRESSION.
 
-  Each row renders the node as a function application —
+  Each node renders as a function application —
   `reduce( folded: expenses ) by :category` — so an edge says what the input IS
   to the node reading it. A join's left and right are not interchangeable, a
   union's inputs are alternatives, and a bare arrow says neither.
 
-  ## Why nested cards rather than indented rows
+  ## Nesting is structure, not arithmetic
 
-  This used to be flat `<li>`s pushed right by a `margin-left` computed from
-  depth. That renders the same information and reads worse, because indentation
-  alone is a weak signal: at four levels the eye cannot tell which ancestor a
-  row belongs to, and nothing bounds a subtree.
+  Two earlier shapes lost this. Flat `<li>`s pushed right by `margin-left:
+  depth * 26px` render the same information and read worse: at four levels the
+  eye cannot tell which ancestor a row belongs to, and nothing bounds a
+  subtree. Adding card borders helped the row and not the tree — the cards were
+  still siblings pretending to be nested.
 
-  So a node is a bordered CARD, and its children nest INSIDE it — the older
-  compliance portal's model tree, whose reasoning holds here. Containment is
-  the structure, so no arithmetic encodes it: a subtree is visibly a region of
-  the page rather than a run of rows that happen to start further right. The
-  dashed rail down the children's edge is what makes a deep nest scannable, and
-  the 4px kind-coloured spine on each card says what KIND of thing it is
-  before you read the label.
+  So this RECURSES. A node's children live in a wrapper inside the node, and
+  that wrapper carries the indent and a dashed rail down its edge. Containment
+  is real, so a subtree is visibly a region of the page and the rail is what
+  makes a deep one scannable. The compliance portal's model tree does exactly
+  this, and its reasoning holds here.
 
-  A cell reached by more than one route carries the stacked-card shadow — one
-  glyph meaning "a set, not a single thing", the same one the SVG uses.
+  ## Two lines, not one
+
+  A single baseline row puts the id, its badges, the algebra and the key count
+  in one horizontal run at one weight, and nothing wins. The portal splits them:
+  a small uppercase KIND line carrying the operation and its badges, then the
+  NAME beneath at reading weight. Scanning down a column of names is what the
+  eye is good at; scanning a run of mixed-weight fragments is not.
 
   Collapsed below depth 1 by default, with a child count on every collapsible
-  row: a 7-deep graph is unreadable fully expanded, and a collapsed row with no
-  count looks like a leaf.
+  node: a 7-deep graph is unreadable fully expanded, and a collapsed node with
+  no count looks like a leaf.
 
   Toggling is `Phoenix.LiveView.JS` — a class flip in the browser, no server
-  round-trip, so opening a branch costs nothing.
+  round-trip, so opening a branch costs nothing. The toggle targets the
+  wrapper by id rather than a prefix selector over every descendant, which is
+  what nesting buys.
   """
   def hierarchy(assigns) do
     ~H"""
     <div class="rdd-tree">
+      <.tree_node node={@node} status={@status} selected={@selected} />
+    </div>
+    """
+  end
+
+  attr(:node, :map, required: true)
+  attr(:status, :map, required: true)
+  attr(:selected, :string, default: nil)
+
+  defp tree_node(assigns) do
+    ~H"""
+    <div class={[
+      "rdd-node",
+      kind_class(@node),
+      @node.routes > 1 && "rdd-many",
+      @node.closed? && "rdd-closed"
+    ]}>
       <div
-        :for={row <- @rows}
-        id={"row-#{row.path}"}
-        class={["rdd-node rdd-kids", row.depth > 1 && "hidden"]}
+        class={["rdd-row", @node.id == @selected && "rdd-on"]}
+        phx-click={@node.children > 0 && toggle_kids(@node)}
       >
-        <div
-          class={[
-            "rdd-row",
-            row.routes > 1 && "rdd-many",
-            row.id == @selected && "rdd-on"
-          ]}
-          style={"margin-left: #{row.depth * 26}px"}
+        <span class="rdd-lead"></span>
+
+        <span
+          :if={@node.children > 0}
+          id={"chev-#{@node.path}"}
+          class={["rdd-chev", not @node.closed? && "rotate-90"]}
         >
-          <span class={["rdd-lead", lead_class(row)]}></span>
+          ▸
+        </span>
+        <span :if={@node.children == 0} class="rdd-chev rdd-chev-none"></span>
 
-          <span
-            :if={row.children > 0}
-            class="rdd-chev font-mono text-xs opacity-40 cursor-pointer select-none"
-            phx-click={toggle_kids(row)}
-          >
-            ▸
-          </span>
-          <span :if={row.children == 0} class="font-mono text-xs opacity-0">▸</span>
+        <div class="rdd-body">
+          <div class="rdd-kind">
+            <span :if={application(@node)} class="rdd-op"><%= application(@node) %></span>
+            <span :if={!application(@node)} class="rdd-op">leaf</span>
 
-          <button type="button" phx-click="select" phx-value-cell={row.id} class="font-medium">
-            <%= row.id %>
-          </button>
+            <span :if={@node.children > 1} class="rdd-ccount"><%= @node.children %></span>
 
-          <span :if={row.children > 0} class="badge badge-ghost badge-xs">
-            <%= row.children %>
-          </span>
+            <span :if={@node.routes > 1 and not @node.repeat?} class="rdd-grain rdd-grain-many">
+              × <%= @node.routes %> routes
+            </span>
 
-          <code :if={application(row)} class="text-xs opacity-70 min-w-0 break-all">
-            <%= application(row) %>
-          </code>
+            <span :if={@node.repeat?} class="rdd-grain rdd-grain-one" title="expanded under its other input">
+              also here
+            </span>
 
-          <span
-            :if={row.routes > 1 and not row.repeat?}
-            class="badge badge-outline badge-xs shrink-0"
-          >
-            <%= row.routes %> routes
-          </span>
+            <span
+              :for={{status, n} <- statuses(@status[@node.id])}
+              class={["rdd-badge", status_badge(status)]}
+            >
+              <%= status %> <%= n %>
+            </span>
+          </div>
 
-          <span
-            :if={row.repeat?}
-            class="badge badge-ghost badge-xs shrink-0 italic"
-            title="expanded under its other input"
-          >
-            also here
-          </span>
-
-          <span
-            :for={{status, n} <- statuses(@status[row.id])}
-            class={["badge badge-xs", status_class(status)]}
-          >
-            <%= status %> <%= n %>
-          </span>
-
-          <span
-            class="text-xs opacity-50 tabular-nums ml-auto pl-3 shrink-0"
-            title={count_title(@status[row.id])}
-          >
-            <%= key_count(@status[row.id]) %>
-          </span>
+          <div class="rdd-name">
+            <button type="button" phx-click="select" phx-value-cell={@node.id}>
+              <%= @node.id %>
+            </button>
+          </div>
         </div>
+
+        <span class="rdd-count" title={count_title(@status[@node.id])}>
+          <%= key_count(@status[@node.id]) %>
+        </span>
+      </div>
+
+      <div
+        :if={@node.children > 0}
+        id={"kids-#{@node.path}"}
+        class={["rdd-children", @node.closed? && "hidden"]}
+      >
+        <.tree_node :for={kid <- @node.kids} node={kid} status={@status} selected={@selected} />
       </div>
     </div>
     """
@@ -316,21 +450,21 @@ defmodule ReactiveDagDashboard.Components do
   # where data ENTERS the graph, where it is COMBINED, and where it is merely
   # carried. Three kinds, because the library has three — inventing a colour per
   # operator would imply a taxonomy that does not exist.
-  defp lead_class(%{cell: nil}), do: "rdd-lead-plain"
+  defp kind_class(%{cell: nil}), do: "rdd-plain"
 
-  defp lead_class(%{cell: cell}) do
+  defp kind_class(%{cell: cell}) do
     cond do
-      cell.inputs == [] -> "rdd-lead-source"
-      length(cell.inputs) > 1 -> "rdd-lead-join"
-      true -> "rdd-lead-derive"
+      cell.inputs == [] -> "rdd-source"
+      length(cell.inputs) > 1 -> "rdd-join"
+      true -> "rdd-derive"
     end
   end
 
-  # Collapse this row's whole subtree. Paths are prefixes — "r-0" contains
-  # "r-0-1" and "r-0-1-2" — so one selector reaches every descendant.
-  defp toggle_kids(row) do
-    JS.toggle_class("rotate-90")
-    |> JS.toggle(to: "[id^='row-#{row.path}-']")
+  # One wrapper, addressed by id. The flat version had to match a PREFIX over
+  # every descendant row; nesting means the children are already one element.
+  defp toggle_kids(node) do
+    JS.toggle(to: "#kids-#{node.path}")
+    |> JS.toggle_class("rotate-90", to: "#chev-#{node.path}")
   end
 
   defp application(row), do: ReactiveDagDashboard.Algebra.application(row.cell)
@@ -347,137 +481,132 @@ defmodule ReactiveDagDashboard.Components do
   """
   def detail(assigns) do
     ~H"""
-    <div :if={@detail} class="card bg-base-200 mt-4">
-      <div class="card-body p-4 gap-3">
-        <div class="flex items-baseline gap-2 flex-wrap">
-          <h2 class="card-title text-base"><%= @detail.id %></h2>
+    <div :if={@detail} class="rdd-card">
+      <div class="rdd-card-head">
+        <h2><%= @detail.id %></h2>
 
-          <span :if={@detail.algebra.label} class="badge badge-ghost font-mono text-xs">
-            <%= @detail.algebra.label %>
-          </span>
+        <span :if={@detail.algebra.label} class="rdd-badge rdd-b-mute">
+          <%= @detail.algebra.label %>
+        </span>
 
-          <a
-            :if={@detail.implementation && @detail.implementation.url}
-            href={@detail.implementation.url}
-            target="_blank"
-            rel="noopener"
-            class="link link-hover text-xs opacity-70"
-          >
-            <%= short(@detail.implementation.module) %> ↗
-          </a>
+        <a
+          :if={@detail.implementation && @detail.implementation.url}
+          href={@detail.implementation.url}
+          target="_blank"
+          rel="noopener"
+          class="rdd-link"
+        >
+          <%= short(@detail.implementation.module) %> ↗
+        </a>
+      </div>
+
+      <p :if={NodeDetail.headline(@detail)} class="rdd-lede">
+        <%= NodeDetail.headline(@detail) %>
+      </p>
+
+      <div class="rdd-facts">
+        <div :if={@detail.inputs != []}>
+          <span class="k">reads</span><%= Enum.join(@detail.inputs, ", ") %>
+        </div>
+        <div :if={@detail.outputs != []}>
+          <span class="k">feeds</span><%= Enum.join(@detail.outputs, ", ") %>
+        </div>
+        <div :if={@detail.algebra.detail} class="rdd-mono">
+          <%= @detail.algebra.detail %>
+        </div>
+      </div>
+
+      <div :if={@detail.steps != []} class="rdd-sec">
+        <div class="rdd-sec-head">recent recomputes</div>
+        <table class="rdd-tbl">
+          <tbody>
+            <tr :for={step <- @detail.steps}>
+              <td><%= ms(step.duration_us) %></td>
+              <td><%= length(step.changed) %> changed</td>
+              <td>
+                <span :if={step.triggered_by}>after <%= step.triggered_by %></span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div :if={@detail.steps == []} class="rdd-sec">
+        <div class="rdd-sec-head">recent recomputes</div>
+        <p class="rdd-lede" style="margin:0">no recorded recomputes</p>
+      </div>
+
+      <div :if={@detail.scanner} class="rdd-sec">
+        <div class="rdd-sec-head">
+          scanner
+          <span :if={@detail.scanner.origin}>· <%= @detail.scanner.origin[:label] %></span>
         </div>
 
-        <p :if={NodeDetail.headline(@detail)} class="text-sm opacity-80">
-          <%= NodeDetail.headline(@detail) %>
-        </p>
-
-        <div class="flex gap-4 flex-wrap text-xs">
-          <div :if={@detail.inputs != []}>
-            <span class="opacity-50">reads</span>
-            <%= Enum.join(@detail.inputs, ", ") %>
-          </div>
-          <div :if={@detail.outputs != []}>
-            <span class="opacity-50">feeds</span>
-            <%= Enum.join(@detail.outputs, ", ") %>
-          </div>
-          <div :if={@detail.algebra.detail} class="font-mono opacity-60">
-            <%= @detail.algebra.detail %>
-          </div>
-        </div>
-
-        <div :if={@detail.steps != []} class="mt-1">
-          <div class="text-xs uppercase tracking-wide opacity-50 mb-1">recent recomputes</div>
-          <table class="table table-xs">
-            <tbody>
-              <tr :for={step <- @detail.steps}>
-                <td class="tabular-nums"><%= ms(step.duration_us) %></td>
-                <td class="tabular-nums"><%= length(step.changed) %> changed</td>
-                <td class="opacity-60">
-                  <span :if={step.triggered_by}>after <%= step.triggered_by %></span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <p :if={@detail.steps == []} class="text-xs opacity-50">
-          no recorded recomputes
-        </p>
-
-        <div :if={@detail.scanner} class="border-t border-base-300 pt-3 mt-1">
-          <div class="text-xs uppercase tracking-wide opacity-50 mb-1">
-            scanner
-            <span :if={@detail.scanner.origin} class="normal-case opacity-70">
-              · <%= @detail.scanner.origin[:label] %>
-            </span>
-          </div>
-
-          <div class="flex gap-2 items-center flex-wrap">
-            <button class="btn btn-xs" phx-click="scan" phx-value-cell={@detail.id} phx-value-mode="default">
-              <%= if @detail.scanner.args != [], do: "quick scan", else: "run scan" %>
-            </button>
-
-            <button
-              :if={@detail.scanner.args != []}
-              class="btn btn-xs btn-outline"
-              phx-click="scan"
-              phx-value-cell={@detail.id}
-              phx-value-mode="full"
-              title="ignores the declared bound"
-            >
-              full scan
-            </button>
-
-            <code :if={@detail.scanner.every} class="text-xs opacity-60">
-              every <%= @detail.scanner.every %>
-            </code>
-          </div>
-
-          <div :for={slice <- @detail.slices} class="flex gap-2 items-center flex-wrap mt-2">
-            <span class="text-xs opacity-60">just <%= slice.label %></span>
-
-            <button
-              :for={value <- slice.values || []}
-              class="btn btn-xs btn-ghost"
-              phx-click="scan"
-              phx-value-cell={@detail.id}
-              phx-value-mode="default"
-              phx-value-column={slice.column}
-              phx-value-value={value}
-              title={"poll the source for #{slice.label} #{value} only"}
-            >
-              <%= value %>
-            </button>
-          </div>
-        </div>
-
-        <div :if={@detail.slices != []} class="border-t border-base-300 pt-3 mt-1">
-          <div class="text-xs uppercase tracking-wide opacity-50 mb-1">reprocess</div>
-
-          <div :for={slice <- @detail.slices} class="flex gap-2 items-center flex-wrap mb-1">
-            <span class="text-xs opacity-60"><%= slice.label %></span>
-
-            <button
-              :for={value <- slice.values || []}
-              class="btn btn-xs btn-ghost"
-              phx-click="reprocess"
-              phx-value-cell={@detail.id}
-              phx-value-column={slice.column}
-              phx-value-value={value}
-            >
-              <%= value %>
-            </button>
-          </div>
+        <div class="rdd-row-acts">
+          <button class="rdd-btn" phx-click="scan" phx-value-cell={@detail.id} phx-value-mode="default">
+            <%= if @detail.scanner.args != [], do: "quick scan", else: "run scan" %>
+          </button>
 
           <button
-            class="btn btn-xs btn-outline"
-            phx-click="reprocess"
+            :if={@detail.scanner.args != []}
+            class="rdd-btn"
+            phx-click="scan"
             phx-value-cell={@detail.id}
-            title="and everything below it"
+            phx-value-mode="full"
+            title="ignores the declared bound"
           >
-            whole cell
+            full scan
+          </button>
+
+          <code :if={@detail.scanner.every} class="rdd-mono">
+            every <%= @detail.scanner.every %>
+          </code>
+        </div>
+
+        <div :for={slice <- @detail.slices} class="rdd-row-acts" style="margin-top:8px">
+          <span class="rdd-sec-head" style="margin:0">just <%= slice.label %></span>
+
+          <button
+            :for={value <- slice.values || []}
+            class="rdd-btn rdd-ghost"
+            phx-click="scan"
+            phx-value-cell={@detail.id}
+            phx-value-mode="default"
+            phx-value-column={slice.column}
+            phx-value-value={value}
+            title={"poll the source for #{slice.label} #{value} only"}
+          >
+            <%= value %>
           </button>
         </div>
+      </div>
+
+      <div :if={@detail.slices != []} class="rdd-sec">
+        <div class="rdd-sec-head">reprocess</div>
+
+        <div :for={slice <- @detail.slices} class="rdd-row-acts" style="margin-bottom:6px">
+          <span class="rdd-sec-head" style="margin:0"><%= slice.label %></span>
+
+          <button
+            :for={value <- slice.values || []}
+            class="rdd-btn rdd-ghost"
+            phx-click="reprocess"
+            phx-value-cell={@detail.id}
+            phx-value-column={slice.column}
+            phx-value-value={value}
+          >
+            <%= value %>
+          </button>
+        </div>
+
+        <button
+          class="rdd-btn"
+          phx-click="reprocess"
+          phx-value-cell={@detail.id}
+          title="and everything below it"
+        >
+          whole cell
+        </button>
       </div>
     </div>
     """
@@ -531,7 +660,7 @@ defmodule ReactiveDagDashboard.Components do
     assigns = assign(assigns, :g, geometry(assigns.levels, assigns.plan))
 
     ~H"""
-    <div class="overflow-x-auto border border-base-300 rounded-lg bg-base-200 p-2">
+    <div class="rdd-gwrap">
       <svg viewBox={"0 0 #{@g.width} #{@g.height}"} width={@g.width} height={@g.height} class="rdd-graph">
         <path
           :for={seg <- @g.segments}
@@ -735,8 +864,12 @@ defmodule ReactiveDagDashboard.Components do
 
   # `present` is the good case and needs no colour; anything else is the host's
   # own vocabulary, and a warning tint is the honest default for "not present".
-  defp status_class("present"), do: "badge-ghost"
-  defp status_class(_other), do: "badge-warning badge-outline"
+  #
+  # Only two, deliberately. The library does not know a host's status words —
+  # `tombstoned`, `failing` and `thin` are all just "not present" here — so
+  # inventing a colour per value would be inventing a meaning per value.
+  defp status_badge("present"), do: "rdd-b-ok"
+  defp status_badge(_other), do: "rdd-b-warn"
 
   # three states, one of which is a problem. See NodeDetail / Insights `rows:`.
   # `changed` alone cannot separate "nothing needed redoing" from "the request

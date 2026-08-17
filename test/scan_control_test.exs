@@ -45,7 +45,7 @@ defmodule ReactiveDagDashboard.ScanControlTest do
   # The status line only. Cell ids appear throughout the page, so matching the
   # whole document would pass on text that has nothing to do with the message.
   defp scan_message(html) do
-    case Regex.run(~r/<div class="alert alert-info[^"]*"[^>]*>(.*?)<\/div>/s, html) do
+    case Regex.run(~r/<div class="rdd-alert"[^>]*>(.*?)<\/div>/s, html) do
       [_, msg] -> msg
       nil -> ""
     end

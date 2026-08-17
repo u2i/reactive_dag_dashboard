@@ -37,20 +37,24 @@ defmodule ReactiveDagDashboard.Router do
 
   ## Styling
 
-  The page is built with daisyUI class names and ships no CSS, so the host's
-  stylesheet has to reach it. Two ways, matching the two shapes above:
+  Nothing to do. The dashboard ships its own CSS, scoped to `.rdd` and rendered
+  by the page, so it is styled wherever it is mounted and under whichever
+  layout — including your own.
 
-      # the dashboard's own chrome, told where the CSS lives
-      config :reactive_dag_dashboard, css_path: "/assets/app.css"
+  It used to be built from daisyUI class names it did not ship, which meant a
+  host had to link a stylesheet, point Tailwind at this dependency so those
+  classes were compiled, and keep the dashboard's own root layout. Each of
+  those failed as a page that looked plausible and was subtly broken.
 
-      # or your chrome, which already links it
-      reactive_dag_dashboard "/dag", plan: {MyApp.Dag, :plan, []},
-        root_layout: {MyAppWeb.Layouts, :admin}
+  ## What you DO configure
 
-  Tailwind also has to COMPILE those classes, which means telling it to look
-  inside this dependency:
+  One thing, and it is JavaScript:
 
-      @source "../deps/reactive_dag_dashboard";
+      config :reactive_dag_dashboard, js_path: "/assets/app.js"
+
+  Without it the LiveSocket never connects and nothing on the page is
+  clickable. A host passing its own `:root_layout` already loads its own JS and
+  needs no setting at all.
   """
   defmacro reactive_dag_dashboard(path, opts \\ []) do
     quote bind_quoted: binding() do

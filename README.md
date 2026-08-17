@@ -29,35 +29,24 @@ to hosts with no Phoenix at all (a mix task, a JSON endpoint, an alert). Keeping
 it in the core library also keeps Phoenix and LiveView out of `reactive_dag`'s
 dependency tree.
 
-## Styling: the host provides it
+## Styling: none required
 
-The dashboard is built with [daisyUI](https://daisyui.com) class names and ships
-no CSS. Add it to your `app.css`:
+The dashboard ships its own CSS — about 200 lines, scoped to `.rdd`, rendered by
+the page itself. No Tailwind, no theme, no stylesheet to link. It is styled
+wherever you mount it and under whichever layout, including your own.
 
-```css
-@import "tailwindcss";
-@plugin "daisyui";
-
-/* Tailwind must SEE this dependency's markup to compile the classes it uses */
-@source "../deps/reactive_dag_dashboard";
-```
-
-Then tell the dashboard where your compiled assets live:
+One setting, and it is about JavaScript:
 
 ```elixir
-config :reactive_dag_dashboard,
-  css_path: "/assets/app.css",
-  js_path: "/assets/app.js"
+config :reactive_dag_dashboard, js_path: "/assets/app.js"
 ```
 
-**Both are needed.** Without the CSS the page is unstyled; without the JS the
-LiveSocket never connects, so the page is static HTML and nothing on it is
-clickable — no selecting a node, no direction toggle, no scan or reprocess
-buttons. From a browser those two failures look identical ("the dashboard is
-broken"), so it is worth checking both are set before looking anywhere else.
+Without it the LiveSocket never connects, so the page is static HTML and nothing
+on it is clickable — no selecting a node, no direction toggle, no scan or
+reprocess buttons.
 
-Or, if the dashboard sits inside an admin shell that already has a `<head>`,
-give it your own chrome instead and skip the config:
+If the dashboard sits inside an admin shell that already has a `<head>` and
+loads its own JS, give it your chrome and configure nothing:
 
 ```elixir
 reactive_dag_dashboard "/admin/dag",
@@ -65,16 +54,20 @@ reactive_dag_dashboard "/admin/dag",
   root_layout: {MyAppWeb.Layouts, :admin}
 ```
 
-All three steps are needed for the first shape: without `@source` the classes
-are never compiled, and without `css_path` the stylesheet is never linked.
+`css_path:` is still honoured if you set it — a hook for layering a font or a
+colour override on top. It is no longer required.
 
-It used to ship its own inline stylesheet so that mounting never touched the
-host's assets. The trade was a dashboard that could never match the app around
-it, and a hand-maintained stylesheet that grew a component at a time. Inheriting
-your theme is worth the one line.
+### Why it stopped using daisyUI
 
-If you want your own chrome — a nav bar, a user menu — pass `:root_layout` and
-the dashboard's own layout is never used.
+It was built on daisyUI so it would inherit your theme and look like the rest of
+your admin. That never worked — a design that adapts to any theme commits to
+none — and it cost three configuration steps that each failed as a page that
+looked plausible and was subtly broken: link a stylesheet, point Tailwind at this
+dependency so the classes were compiled at all, and keep the dashboard's own root
+layout or lose its component rules.
+
+Owning the CSS removes all three. The trade is that the dashboard looks like
+itself, which is what it was doing anyway.
 
 
 ## Installation

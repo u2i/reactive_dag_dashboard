@@ -29,8 +29,6 @@ defmodule ReactiveDagDashboard.DagLive do
   """
   use Phoenix.LiveView
 
-  alias Phoenix.LiveView.JS
-
   import ReactiveDagDashboard.Components
 
   alias ReactiveDag.Insights
@@ -202,7 +200,7 @@ defmodule ReactiveDagDashboard.DagLive do
     |> assign(:details, details_for(plan, tree, socket.assigns.controls))
     # NESTED, not flattened: the markup recurses so containment is real
     # structure rather than a computed margin. See Components.hierarchy/1.
-    |> assign(:node, Tree.nested(plan, tree, dir))
+    |> assign(:node, Tree.nested(plan, tree))
     |> assign(:routes, Tree.path_count(tree))
     # The diagram's scope, from the same tree the expression uses. Whole-plan
     # levels drew every cell at once, which at real graph sizes is a tangle no
@@ -348,28 +346,6 @@ defmodule ReactiveDagDashboard.DagLive do
           </button>
         </nav>
 
-        <span :if={@view == :tree} class="rdd-bar-acts">
-          <button
-            type="button"
-            class="rdd-btn rdd-ghost"
-            phx-click={
-              JS.remove_class("hidden", to: ".rdd-children")
-              |> JS.add_class("rotate-90", to: ".rdd-chev")
-            }
-          >
-            expand all
-          </button>
-          <button
-            type="button"
-            class="rdd-btn rdd-ghost"
-            phx-click={
-              JS.add_class("hidden", to: ".rdd-children")
-              |> JS.remove_class("rotate-90", to: ".rdd-chev")
-            }
-          >
-            collapse
-          </button>
-        </span>
 
         <span class="rdd-routes">
           <%= @routes %> route<%= if @routes == 1, do: "", else: "s" %>

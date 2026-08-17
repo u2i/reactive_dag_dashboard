@@ -165,14 +165,11 @@ defmodule ReactiveDagDashboard.DagLive do
     |> assign(:sources, NodeDetail.sources(plan, controls))
     |> assign(:status, Map.new(Insights.summary(plan), &{&1.id, &1}))
     |> assign(:pending, MapSet.new(Insights.pending(plan)))
-    # every cell, grouped — what the picker offers. A page that can only start
-    # from a source or a sink cannot answer "what feeds this" about the half of
-    # a real graph that is neither.
-    |> assign(:groups, Tree.groups(plan))
   end
 
   defp assign_view(%{assigns: %{selected: nil}} = socket) do
     socket
+    |> assign(:groups, Tree.groups(socket.assigns.plan, socket.assigns.direction))
     |> assign(:node, nil)
     |> assign(:detail, nil)
     |> assign(:routes, 0)
@@ -184,9 +181,13 @@ defmodule ReactiveDagDashboard.DagLive do
     tree = tree_for(plan, id, dir)
 
     socket
+    # The picker's own order depends on direction — the ends that matter for
+    # THIS question come first — so it is assigned here, where direction is
+    # known, rather than in `load/1`, which runs before `handle_params` sets it.
+    |> assign(:groups, Tree.groups(plan, dir))
     # NESTED, not flattened: the markup recurses so containment is real
     # structure rather than a computed margin. See Components.hierarchy/1.
-    |> assign(:node, Tree.nested(plan, tree))
+    |> assign(:node, Tree.nested(plan, tree, dir))
     |> assign(:routes, Tree.path_count(tree))
     # The diagram's scope, from the same tree the expression uses. Whole-plan
     # levels drew every cell at once, which at real graph sizes is a tangle no

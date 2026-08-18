@@ -62,18 +62,20 @@ defmodule ReactiveDagDashboard.MixProject do
       # It was `== 0.17.0-rc.N` on the belief that `~>` could not match a
       # pre-release at all. That is not so, and the exact pin meant a PR here per
       # library release even when nothing in this dashboard cared.
-      # rc.31 for `detail` on `[:reactive_dag, :scan, :stop]`, which the scan
-      # outcome line reads to say what a poll COST. Older libraries emit the
-      # event without it, so the cost silently never appears — the failure mode
-      # a floor exists to prevent.
+      # rc.35 for `[:reactive_dag, :drain, :cell_failed]` — a cell that failed
+      # WITHOUT failing the drain. An older library never emits it, so a
+      # contained failure would show as a clean drain over a stale cell.
       #
-      # (rc.29 added `Report.by/2` for the log's per-model token line.)
+      # Earlier floors, each for the same reason — an older library emits the
+      # event without the field, so the feature silently never appears:
       #
-      # (rc.27 was the previous floor, for `Source.progress/3` — the Observer
-      # bridges `[:reactive_dag, :scan, :progress]`, and against rc.26 the
-      # fixture scanner could not emit it, so the tests passed on hand-fired
-      # telemetry while the real path went untested.)
-      {:reactive_dag, "~> 0.17.0-rc.31"},
+      #   rc.31 — `detail` on `:scan, :stop`, which the scan outcome line reads
+      #           to say what a poll COST.
+      #   rc.29 — `Report.by/2`, for the log's per-model token line.
+      #   rc.27 — `Source.progress/3`; against rc.26 the fixture scanner could
+      #           not emit it, so the tests passed on hand-fired telemetry
+      #           while the real path went untested.
+      {:reactive_dag, "~> 0.17.0-rc.35"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

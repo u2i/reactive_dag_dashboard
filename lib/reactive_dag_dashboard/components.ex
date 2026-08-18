@@ -828,6 +828,11 @@ defmodule ReactiveDagDashboard.Components do
   # and then the recompute is the more specific fact, so it wins.
   defp activity_label(nil), do: nil
 
+  # BEFORE the changed-count clause, which would otherwise render the tuple.
+  # A cell that failed did not run: its keys are still dirty and the next drain
+  # retries them, so this must not read as a recompute that changed nothing.
+  defp activity_label(%{changed: {:failed, _reason}}), do: "did not run · retrying"
+
   defp activity_label(%{changed: n}), do: "ran · #{n} changed"
 
   defp activity_label(%{scan: :running}), do: "polling…"
@@ -852,6 +857,7 @@ defmodule ReactiveDagDashboard.Components do
   defp activity_label(_), do: nil
 
   # A failure and an outage are not successes and must not be tinted like one.
+  defp activity_class(%{changed: {:failed, _reason}}), do: "rdd-ran-bad"
   defp activity_class(%{scan: :failed}), do: "rdd-ran-bad"
   defp activity_class(%{scan: %{unreachable: up}}) when up != [], do: "rdd-ran-bad"
   defp activity_class(_), do: nil

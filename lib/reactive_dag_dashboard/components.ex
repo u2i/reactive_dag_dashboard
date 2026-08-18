@@ -1115,6 +1115,32 @@ defmodule ReactiveDagDashboard.Components do
         <p class="rdd-lede" style="margin:0">no recorded recomputes</p>
       </div>
 
+      <%!-- The other half of the `changed` count above: that column says how
+            many keys moved, and this says what moving MEANS here. Rendered
+            unconditionally — a node that declares nothing has an answer too
+            ("every column"), and omitting the section would read as "unknown"
+            to the person asking why a cascade fired. --%>
+      <div class="rdd-sec">
+        <div class="rdd-sec-head">counts as changed</div>
+
+        <p class="rdd-lede" style="margin:0">
+          <%= compare_lede(@detail.compare) %>
+        </p>
+
+        <div :if={@detail.compare.columns} class="rdd-row-acts" style="margin-top:7px">
+          <code :for={col <- @detail.compare.columns} class="rdd-mono"><%= inspect(col) %></code>
+        </div>
+
+        <%!-- A declaration that buys nothing, said once rather than shown as if
+              it were live: a single `aggregate` builds its row from the key
+              column plus that aggregate's dest, so there is nothing to narrow
+              past. --%>
+        <p :if={@detail.compare.inert} class="rdd-lede" style="margin:7px 0 0">
+          inert here — a single <code class="rdd-mono">aggregate</code> builds its row from the
+          key column and that aggregate alone, so there is no other column to narrow past
+        </p>
+      </div>
+
       <div :if={@detail.scanner} class="rdd-sec">
         <div class="rdd-sec-head">
           scanner
@@ -1190,6 +1216,38 @@ defmodule ReactiveDagDashboard.Components do
     </div>
     """
   end
+
+  # What the payload write consults when it decides a key moved — one sentence
+  # per basis, each of which has to say what it MEANS rather than name a option.
+  #
+  # "every column" is the one worth spelling out: it is what a node that
+  # declares nothing gets, it is usually right, and a reader who has just seen
+  # an unexpected cascade needs to be told it rather than left to infer it from
+  # a missing section.
+  defp compare_lede(%{basis: :compare, columns: cols}),
+    do: "only #{count_cols(cols)} — the node declares which of its columns are its result"
+
+  defp compare_lede(%{basis: :fingerprint, columns: nil}),
+    do: "a stored fingerprint, computed by the node's own function — not the row's columns"
+
+  defp compare_lede(%{basis: :fingerprint, columns: cols}),
+    do: "a stored fingerprint of #{count_cols(cols)} — not the rest of the row"
+
+  # A DIFFERENT mechanism wearing the same word: `per_key` hashes the INPUTS to
+  # decide whether to re-run its action, and then writes without going through
+  # the payload comparison at all. Saying "fingerprint" alone would leave a
+  # reader believing the payload write compared it.
+  defp compare_lede(%{basis: :input_fingerprint, columns: nil}),
+    do:
+      "whether the per_key inputs moved, by the node's own function — the action is skipped when they have not"
+
+  defp compare_lede(%{basis: :input_fingerprint, columns: cols}),
+    do:
+      "whether the per_key inputs moved (#{count_cols(cols)}) — the action is skipped when they have not"
+
+  defp compare_lede(_), do: "every column the row carries — the node narrows nothing"
+
+  defp count_cols(cols), do: "#{length(cols)} column#{plural(length(cols))}"
 
   attr(:levels, :list, required: true)
   attr(:status, :map, required: true)

@@ -18,10 +18,16 @@ defmodule ReactiveDagDashboard.NodeDetail do
       and a node that keeps its rows elsewhere are not both rendered as broken.
     * **what it recently did** — its steps from the retained drain reports:
       how long, how many keys, and what triggered it.
+    * **what counts as a change** — which columns the payload write compares
+      when it decides a key moved. See `compare/1`.
 
-  The last one is the piece a graph picture cannot give you. A node that looks
+  The fourth is the piece a graph picture cannot give you. A node that looks
   structurally fine and has not recomputed in a week is the interesting case,
   and it is invisible without history.
+
+  The fifth is the missing half of the fourth's `changed` count. A step saying
+  *40 keys changed* is only half an answer while "changed" is undefined, and it
+  is the first thing you want when a cascade fires and nothing looks different.
   """
 
   alias ReactiveDag.Insights
@@ -38,6 +44,11 @@ defmodule ReactiveDagDashboard.NodeDetail do
           outputs: [String.t()],
           scanner: map() | nil,
           slices: [map()],
+          compare: %{
+            basis: :compare | :fingerprint | :every_column,
+            columns: [atom()] | nil,
+            inert: boolean()
+          },
           steps: [map()],
           last_run: DateTime.t() | nil
         }
@@ -69,10 +80,107 @@ defmodule ReactiveDagDashboard.NodeDetail do
           # what a human may select this node by — the unit a PERSON picks,
           # which is rarely the unit a change invalidates
           slices: ReactiveDag.Node.Rows.slices(cell),
+          # ...and the unit that DOES invalidate: what counts as a change
+          compare: compare(cell),
           steps: steps,
           last_run: steps |> List.first() |> then(&(&1 && &1.at))
         }
     end
+  end
+
+  @doc """
+  What makes a key count as CHANGED — the other half of a step's `changed` count.
+
+  A recompute produces a row per key; the payload write then decides whether
+  that row MOVED, and only a moved row propagates. Which columns it consults is
+  a declaration, and three different answers are possible — so the reader gets
+  the basis, not just a list:
+
+    * `:compare` — the node declared `compare [...]`, and those columns and no
+      others constitute its result. The rest are part of the RECORD without
+      being part of the answer: `doc_id` (provenance), `ordinal` (position,
+      which a re-parse shifts without anything actually changing).
+    * `:fingerprint` — the node declared a top-level `fingerprint`, which
+      stores a digest and compares that instead. It is what a source-fed LEAF
+      wants, whose row carries fields that move on every observation
+      (`last_seen_at`, an `etag` a server re-issues), and
+      `ReactiveDag.Node.Payload` gives it precedence when a node declares both.
+    * `:input_fingerprint` — a `per_key` node's own `fingerprint:`, which is a
+      DIFFERENT mechanism wearing the same word. It is an input skip: the row's
+      declared inputs are hashed and the action is not re-run when they have
+      not moved. `ReactiveDag.Node.Recompute.PerKey` then writes with
+      `Ash.create!` directly rather than through `Payload`, so neither
+      `compare` nor the payload fingerprint is consulted on that path at all.
+      Reporting it as either would be wrong about which code decides.
+    * `:every_column` — the node declared neither, so every field the row
+      carries is compared. That is right when every field is part of the
+      answer, and it is an ANSWER rather than an absence: rendering nothing
+      here would read as "unknown" to someone asking why a cascade fired.
+
+  `inert: true` marks the case where a declaration buys nothing. A node whose
+  computation is a single `aggregate` has its row built by
+  `ReactiveDag.Node.Recompute.Aggregate.project/3` from the key column plus that
+  one aggregate's `dest` — there is no bookkeeping column to narrow past, so
+  `compare` cannot exclude anything. Two or more aggregates and it bites again
+  (a `count` that moves while an `avg` does not), which is why the test is on
+  the number of aggregates and not merely on the node being one.
+
+  Read from `cell.meta[:compare]`, the same public meta `Rows.slices/1` reads —
+  the library exposes no `Rows.compare/1`.
+  """
+  @spec compare(ReactiveDag.Cell.t()) :: %{
+          basis: :compare | :fingerprint | :input_fingerprint | :every_column,
+          columns: [atom()] | nil,
+          inert: boolean()
+        }
+  def compare(%{meta: meta}) do
+    declared = meta[:compare]
+
+    cond do
+      # Payload's own precedence, not ours: a node declaring both compares the
+      # digest, so reporting the `compare` list would name columns the write
+      # never consults.
+      not is_nil(meta[:fingerprint]) ->
+        %{basis: :fingerprint, columns: fingerprint_columns(meta[:fingerprint]), inert: false}
+
+      fp = per_key_fingerprint(meta) ->
+        %{basis: :input_fingerprint, columns: fingerprint_columns(fp), inert: false}
+
+      is_list(declared) and declared != [] ->
+        %{basis: :compare, columns: declared, inert: inert_aggregate?(meta)}
+
+      true ->
+        %{basis: :every_column, columns: nil, inert: false}
+    end
+  end
+
+  def compare(_cell), do: %{basis: :every_column, columns: nil, inert: false}
+
+  # `fingerprint` is either the input fields it hashes or a `(row -> value)`
+  # function. Only the first names columns; a function is opaque and says so by
+  # carrying none.
+  defp fingerprint_columns(fields) when is_list(fields), do: fields
+  defp fingerprint_columns(_), do: nil
+
+  # A `per_key`'s fingerprint lives on the ENTITY, not in the top-level meta —
+  # the two are different mechanisms that happen to share a word.
+  defp per_key_fingerprint(%{per_key: %{fingerprint: fp}}) when not is_nil(fp), do: fp
+  defp per_key_fingerprint(_meta), do: nil
+
+  # A single `aggregate` projects the key column plus that aggregate's `dest`
+  # and nothing else — nothing for `compare` to narrow past.
+  defp inert_aggregate?(%{aggregate: %{} = agg}), do: aggregate_count(agg) < 2
+  defp inert_aggregate?(_meta), do: false
+
+  defp aggregate_count(agg) do
+    ReactiveDag.Node.Recompute.Declarative.fold_kinds()
+    |> Enum.map(&Map.get(agg, &1))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(fn
+      spec when is_list(spec) -> length(spec)
+      _dest -> 1
+    end)
+    |> Enum.sum()
   end
 
   @doc """

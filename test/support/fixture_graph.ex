@@ -300,6 +300,124 @@ defmodule ReactiveDagDashboard.FixtureGraph do
     def reset, do: Agent.update(__MODULE__, fn _ -> [] end)
   end
 
+  # A node that declares `compare` — the row carries provenance (`doc_id`) and
+  # position (`ordinal`) that are part of the RECORD without being part of the
+  # result. Without a node of this shape in the fixture, the drawer's
+  # "counts as changed" section could report every node as comparing everything
+  # and every test would still pass.
+  defmodule ExpenseProvenance do
+    use Ash.Resource,
+      domain: Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [ReactiveDag.Node]
+
+    ets do
+    end
+
+    attributes do
+      attribute(:key, :string, primary_key?: true, allow_nil?: false, public?: true)
+      attribute(:status, :string, public?: true)
+      # provenance and position: a re-parse shifts the ordinal without anything
+      # about the ANSWER having moved
+      attribute(:doc_id, :string, public?: true)
+      attribute(:ordinal, :integer, public?: true)
+    end
+
+    actions do
+      defaults([:read, :destroy])
+      create(:upsert, upsert?: true, accept: [:key, :status, :doc_id, :ordinal])
+    end
+
+    reactive do
+      id(:expense_provenance)
+      compare([:status])
+
+      reduce(
+        over: :expenses,
+        group_by: :category,
+        into: fn _cat, rows ->
+          %{status: "#{length(rows)} seen", doc_id: "d1", ordinal: length(rows)}
+        end
+      )
+    end
+  end
+
+  # A source-fed LEAF declaring a top-level `fingerprint` — the OTHER
+  # mechanism, and the one that outranks `compare` in `Payload.moved?`. Its row
+  # carries a `last_seen_at` that moves on every observation without the
+  # observation having changed, which is exactly what a digest exists to ignore.
+  defmodule Watched do
+    use Ash.Resource,
+      domain: Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [ReactiveDag.Node]
+
+    ets do
+    end
+
+    attributes do
+      attribute(:key, :string, primary_key?: true, allow_nil?: false, public?: true)
+      attribute(:body, :string, public?: true)
+      attribute(:last_seen_at, :utc_datetime, public?: true)
+      attribute(:fingerprint, :string, public?: true)
+    end
+
+    actions do
+      defaults([:read, :destroy])
+      create(:upsert, upsert?: true, accept: [:key, :body, :last_seen_at, :fingerprint])
+    end
+
+    reactive do
+      id(:watched)
+      leaf?(true)
+      fingerprint([:body])
+    end
+  end
+
+  # A SINGLE-aggregate node — the case where `compare` is INERT.
+  #
+  # `Aggregate.project/3` builds the row from the key column plus each
+  # aggregate's `dest` and nothing else, so with one aggregate there is no
+  # bookkeeping column for `compare [:spend_count]` to narrow past. The
+  # declaration is real and does nothing, and the drawer must not show it as if
+  # it were live.
+  defmodule ExpenseTally do
+    use Ash.Resource,
+      domain: Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [ReactiveDag.Node]
+
+    ets do
+    end
+
+    attributes do
+      attribute(:key, :string, primary_key?: true, allow_nil?: false, public?: true)
+      attribute(:spend_count, :integer, public?: true)
+    end
+
+    relationships do
+      has_many :expenses, ReactiveDagDashboard.FixtureGraph.Expenses do
+        source_attribute(:key)
+        destination_attribute(:category)
+      end
+    end
+
+    actions do
+      defaults([:read, :destroy])
+      create(:upsert, upsert?: true, accept: [:key, :spend_count])
+    end
+
+    reactive do
+      id(:expense_tally)
+      depends_on([:expenses])
+      # declared, and inert: one aggregate means the row is the key plus this
+      # column, so there is nothing else to exclude
+      compare([:spend_count])
+
+      aggregate(over: :expenses, count: :spend_count)
+    end
+  end
+
   defmodule ExpenseScan do
     @behaviour ReactiveDag.Source
 
@@ -502,6 +620,18 @@ defmodule ReactiveDagDashboard.FixtureGraph do
         VerdictAudit,
         Published
       ])
+
+  @doc """
+  A SEPARATE plan for the change-basis tests — `expenses` plus the nodes that
+  declare a `compare`.
+
+  Its own plan rather than more nodes in `plan/0` on the fixture's own standing
+  advice: the shared graph's shape is asserted by the tree and layout tests
+  (path counts, level counts, edge counts), and growing the part under test
+  should not renumber the rest.
+  """
+  def compare_plan,
+    do: ReactiveDag.Node.graph([Expenses, ExpenseProvenance, ExpenseTally, Watched])
 
   # recompute/2 returns {:ok, changed} or {:ok, changed, meta} depending on the
   # node shape; normalise so the seed does not care which.

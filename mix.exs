@@ -62,6 +62,13 @@ defmodule ReactiveDagDashboard.MixProject do
       # It was `== 0.17.0-rc.N` on the belief that `~>` could not match a
       # pre-release at all. That is not so, and the exact pin meant a PR here per
       # library release even when nothing in this dashboard cared.
+      # rc.39 for `compare:` — the columns a node counts as its RESULT. The node
+      # drawer reads `cell.meta[:compare]`, which an older library never stamps,
+      # so the section would render "every column" for a node that declares a
+      # narrower list. That is the wrong answer, not a missing one: it is the
+      # explanation for a `changed` count, so a reader would be told the cascade
+      # fired on columns it does not actually watch.
+      #
       # rc.35 for `[:reactive_dag, :drain, :cell_failed]` — a cell that failed
       # WITHOUT failing the drain. An older library never emits it, so a
       # contained failure would show as a clean drain over a stale cell.
@@ -75,7 +82,7 @@ defmodule ReactiveDagDashboard.MixProject do
       #   rc.27 — `Source.progress/3`; against rc.26 the fixture scanner could
       #           not emit it, so the tests passed on hand-fired telemetry
       #           while the real path went untested.
-      {:reactive_dag, "~> 0.17.0-rc.35"},
+      {:reactive_dag, "~> 0.17.0-rc.39"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

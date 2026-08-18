@@ -151,6 +151,78 @@ defmodule ReactiveDagDashboard.NodeDetailTest do
     end
   end
 
+  describe "what counts as a change — the other half of the `changed` count" do
+    defp compare_plan, do: FixtureGraph.compare_plan()
+
+    test "a node declaring `compare` reports those columns and no others" do
+      detail = NodeDetail.build(compare_plan(), "expense_provenance")
+
+      assert detail.compare.basis == :compare
+      assert detail.compare.columns == [:status]
+
+      refute :doc_id in detail.compare.columns,
+             "provenance is part of the record, not the result"
+
+      refute :ordinal in detail.compare.columns,
+             "a re-parse shifts the ordinal without anything having changed"
+    end
+
+    test "a node declaring none says every column, which is an ANSWER not an absence" do
+      # the reader asking why a cascade fired needs to be TOLD this, not left to
+      # infer it from a missing section
+      detail = NodeDetail.build(plan(), "category_health")
+
+      assert detail.compare.basis == :every_column
+      assert detail.compare.columns == nil
+      refute detail.compare.inert
+    end
+
+    test "a per_key fingerprint is named as the INPUT skip it is, not as the payload's" do
+      # two mechanisms share the word. `per_key`'s `fingerprint:` hashes the
+      # inputs to decide whether to re-run the action, then writes with
+      # `Ash.create!` — never reaching `Payload`, so neither `compare` nor the
+      # payload fingerprint is consulted on that path
+      detail = NodeDetail.build(plan(), "expense_notes")
+
+      assert detail.compare.basis == :input_fingerprint
+      assert detail.compare.columns == [:amount]
+    end
+
+    test "a leaf declaring a top-level fingerprint compares THAT, not its columns" do
+      # the mechanism that OUTRANKS compare in `Payload.moved?` — naming the
+      # row's columns here would name columns the write never consults
+      detail = NodeDetail.build(compare_plan(), "watched")
+
+      assert detail.compare.basis == :fingerprint
+      assert detail.compare.columns == [:body]
+
+      refute :last_seen_at in detail.compare.columns,
+             "the field that moves on every observation is the one a digest exists to ignore"
+    end
+
+    test "a leaf declaring neither is every column, said plainly" do
+      detail = NodeDetail.build(plan(), "unscanned")
+
+      assert detail.compare.basis == :every_column
+      assert detail.compare.columns == nil
+    end
+
+    test "a declaration on a single-aggregate node is marked INERT, not shown as live" do
+      # `Aggregate.project/3` builds the row from the key column plus that one
+      # aggregate's dest — there is no bookkeeping column to narrow past
+      detail = NodeDetail.build(compare_plan(), "expense_tally")
+
+      assert detail.compare.basis == :compare
+      assert detail.compare.inert, "one aggregate means `compare` can exclude nothing"
+    end
+
+    test "a declaration on an ordinary node is NOT inert" do
+      detail = NodeDetail.build(compare_plan(), "expense_provenance")
+
+      refute detail.compare.inert
+    end
+  end
+
   test "an unknown cell is nil, not a crash" do
     refute NodeDetail.build(plan(), "nope")
   end

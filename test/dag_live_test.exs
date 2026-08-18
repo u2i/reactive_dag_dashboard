@@ -201,7 +201,18 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       assert html =~ "quick scan", "its scanner controls"
       assert html =~ "reprocess", "and its slice controls"
     end
+
+    test "and says what makes a key count as CHANGED, declared or not" do
+      # the other half of the `changed` count in "recent recomputes". `expenses`
+      # declares nothing, and the section renders anyway: omitting it would read
+      # as "unknown" to whoever is asking why a cascade fired
+      {:ok, _view, html} = at("#{@path}/cell/expenses")
+
+      assert html =~ "counts as changed"
+      assert html =~ "every column the row carries"
+    end
   end
+
   describe "the hierarchy" do
     test "structure is drawn by indent and a collapse chevron" do
       # depth is CONTAINMENT, not a computed margin: a node's children live in

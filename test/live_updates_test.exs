@@ -632,12 +632,20 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     test "a step reporting the map shape counts toward its own step total" do
       # The regression this guards: summing only numbers reads a map as ZERO, so
       # a node reporting its tokens honestly looked like one reporting none.
+      #
+      # Scoped to the STEP row. A bare `html =~ "4.5k"` passes on the run-level
+      # roll-up alone — in this fixture the run total and the one LLM step's
+      # total are the same number, so the assertion could not tell which row
+      # rendered it and the step's own arithmetic went unguarded.
       ReactiveDag.Insights.forget_reports()
       ReactiveDag.Insights.record(report_with_models())
 
-      {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
+      {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
 
-      assert html =~ "4.5k", "the LLM step's own tokens, not 0"
+      steps = view |> element(".rdd-run-steps") |> render()
+
+      assert steps =~ "4.5k", "the LLM step's own tokens, not 0"
+      assert steps =~ "agenda_items", "and it is the step row, not the run row"
     end
 
     defp report_with_models do

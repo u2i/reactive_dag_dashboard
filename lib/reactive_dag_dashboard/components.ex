@@ -14,6 +14,7 @@ defmodule ReactiveDagDashboard.Components do
 
   alias Phoenix.LiveView.JS
 
+  alias ReactiveDag.Rollup
   alias ReactiveDagDashboard.NodeDetail
 
   @doc """
@@ -985,19 +986,10 @@ defmodule ReactiveDagDashboard.Components do
   defp plural(1), do: ""
   defp plural(_), do: "s"
 
-  # A count may be reported flat (`tokens_in: 1600`) or broken down per model
-  # (`tokens_in: %{"haiku" => 1200, "sonnet" => 400}`). Summing only numbers
-  # would silently read the second shape as ZERO — a node reporting its tokens
-  # honestly would look like a node reporting none.
+  # The library's fold, not our own: a step's cost here and the same step's cost
+  # in a drain total are ONE fold rather than two that have to agree.
   defp step_tokens(%{meta: meta}) when is_map(meta) do
-    [:tokens_in, :tokens_out]
-    |> Enum.map(&Map.get(meta, &1, 0))
-    |> Enum.map(fn
-      n when is_number(n) -> n
-      m when is_map(m) -> m |> Map.values() |> Enum.filter(&is_number/1) |> Enum.sum()
-      _ -> 0
-    end)
-    |> Enum.sum()
+    Rollup.total([meta], :tokens_in) + Rollup.total([meta], :tokens_out)
   end
 
   defp step_tokens(_), do: 0

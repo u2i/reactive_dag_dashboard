@@ -37,6 +37,7 @@ defmodule ReactiveDagDashboard.DagLive do
 
   alias ReactiveDag.Drain.Report
   alias ReactiveDag.Insights
+  alias ReactiveDag.Source
   alias ReactiveDagDashboard.{Actions, LiveUpdates, NodeDetail, Tree}
 
   @impl true
@@ -242,7 +243,7 @@ defmodule ReactiveDagDashboard.DagLive do
   # spent real money classifying documents that turned out to be unchanged, and
   # "nothing changed" alone reads as "this was free".
   defp scan_outcome(cell_id, result),
-    do: found(cell_id, result) <> cost(Map.get(result, :detail, %{}))
+    do: found(cell_id, result) <> cost(result)
 
   defp found(cell_id, %{changed: 0, unreachable: []}),
     do: "scanned #{cell_id} — nothing changed"
@@ -257,12 +258,13 @@ defmodule ReactiveDagDashboard.DagLive do
 
   # Only what a scanner actually reported. A crawler that spends nothing says
   # nothing, rather than a reassuring "0 tok" on every plain fetch.
-  defp cost(detail) when detail == %{}, do: ""
-
-  defp cost(detail) do
-    tokens = sum_count(detail, :tokens_in) + sum_count(detail, :tokens_out)
-    calls = sum_count(detail, :llm_calls)
-    hits = sum_count(detail, :cache_hits)
+  #
+  # `detail_total/2` takes the poll result whole — a scan and a drain answer
+  # "what did this cost" through one fold rather than two that must agree.
+  defp cost(result) do
+    tokens = Source.detail_total(result, :tokens_in) + Source.detail_total(result, :tokens_out)
+    calls = Source.detail_total(result, :llm_calls)
+    hits = Source.detail_total(result, :cache_hits)
 
     parts =
       [
@@ -276,15 +278,6 @@ defmodule ReactiveDagDashboard.DagLive do
       |> Enum.reject(&is_nil/1)
 
     if parts == [], do: "", else: " · " <> Enum.join(parts, ", ")
-  end
-
-  # A count may be flat or broken down per model, exactly as on a drain step.
-  defp sum_count(detail, key) do
-    case Map.get(detail, key) do
-      n when is_number(n) -> n
-      m when is_map(m) -> m |> Map.values() |> Enum.filter(&is_number/1) |> Enum.sum()
-      _ -> 0
-    end
   end
 
   # One entry per DRAIN, newest first, with the roll-ups a log line wants.

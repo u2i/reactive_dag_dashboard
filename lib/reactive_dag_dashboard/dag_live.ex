@@ -242,19 +242,24 @@ defmodule ReactiveDagDashboard.DagLive do
   # than folded into each clause: a poll that changed nothing can still have
   # spent real money classifying documents that turned out to be unchanged, and
   # "nothing changed" alone reads as "this was free".
-  defp scan_outcome(cell_id, result),
-    do: found(cell_id, result) <> cost(result)
+  defp scan_outcome(cell_id, run),
+    do: "scanned #{cell_id} — " <> Actions.summarise(run) <> incomplete(run) <> cost(run)
 
-  defp found(cell_id, %{changed: 0, unreachable: []}),
-    do: "scanned #{cell_id} — nothing changed"
-
-  defp found(cell_id, %{changed: n, unreachable: []}),
-    do: "scanned #{cell_id} — #{n} key#{if n == 1, do: "", else: "s"} changed"
-
-  defp found(cell_id, %{changed: n, unreachable: up}),
-    do:
-      "scanned #{cell_id} — #{n} changed, #{length(up)} upstream(s) unreachable, " <>
-        "so results are incomplete"
+  # ONE renderer for both paths. An inline scan already went through
+  # `Actions.summarise/1` and said "2 new, 1 updated, 1 withdrawn"; a queued one
+  # came through here and said "3 keys changed", because the observer had
+  # flattened the result before broadcasting it. Same scan, same data, worse
+  # wording on the path people actually use.
+  #
+  # `ScanRun.complete?/1` rather than a local `unreachable: up when up != []`:
+  # the honest-gap check is the library's, and it was written twice here.
+  defp incomplete(run) do
+    if ReactiveDag.ScanRun.complete?(run) do
+      ""
+    else
+      ", #{length(run.unreachable)} upstream(s) unreachable, so results are incomplete"
+    end
+  end
 
   # Only what a scanner actually reported. A crawler that spends nothing says
   # nothing, rather than a reassuring "0 tok" on every plain fetch.

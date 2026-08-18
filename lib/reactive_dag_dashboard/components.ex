@@ -848,17 +848,35 @@ defmodule ReactiveDagDashboard.Components do
 
   defp activity_label(%{scan: :failed}), do: "poll failed"
 
-  defp activity_label(%{scan: %{changed: 0, unreachable: []}}), do: "polled · no change"
+  # The library's own predicates rather than shape-matching a count. `changed` is
+  # a key LIST on a `%ScanRun{}`, and `complete?/1` is the honest-gap check that
+  # was written twice in this file.
+  defp activity_label(%{scan: %ReactiveDag.ScanRun{} = run}) do
+    cond do
+      not ReactiveDag.ScanRun.complete?(run) ->
+        "polled · #{length(run.unreachable)} unreachable"
 
-  defp activity_label(%{scan: %{changed: 0, unreachable: up}}) when up != [],
-    do: "polled · #{length(up)} unreachable"
+      changed_count(run) == 0 ->
+        "polled · no change"
 
-  defp activity_label(%{scan: %{changed: n}}), do: "polled · #{n} found"
+      true ->
+        "polled · #{changed_count(run)} found"
+    end
+  end
 
   defp activity_label(_), do: nil
 
+  # A run synthesised from telemetry has the COUNT but not the key names — see
+  # the observer — so the list is truthfully empty and the count rides in
+  # `detail`.
+  defp changed_count(%{changed: [], detail: %{changed_count: n}}), do: n
+  defp changed_count(%{changed: changed}), do: length(changed)
+
   # A failure and an outage are not successes and must not be tinted like one.
   defp activity_class(%{changed: {:failed, _reason}}), do: "rdd-ran-bad"
+  defp activity_class(%{scan: %ReactiveDag.ScanRun{} = run}),
+    do: unless(ReactiveDag.ScanRun.complete?(run), do: "rdd-ran-bad")
+
   defp activity_class(%{scan: :failed}), do: "rdd-ran-bad"
   defp activity_class(%{scan: %{unreachable: up}}) when up != [], do: "rdd-ran-bad"
   defp activity_class(_), do: nil

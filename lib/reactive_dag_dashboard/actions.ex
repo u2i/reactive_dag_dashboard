@@ -134,7 +134,11 @@ defmodule ReactiveDagDashboard.Actions do
   # `detail` says WHY each key changed, which is the difference between "4 keys
   # changed" and "2 new, 1 updated, 1 withdrawn". A scanner only has it if it
   # reconciles through the library and passes it back, so fall back to the count.
-  def summarise(%{detail: %{} = d}) do
+  # The four reconcile lists, not merely "a map under `detail:`". That key also
+  # carries what the poll COST — a crawler reporting `%{tokens_in: …}` and no
+  # reconcile would otherwise reach this clause and raise on a missing
+  # `:created`, taking the live page down with it.
+  def summarise(%{detail: %{created: _, updated: _, revived: _, retired: _} = d}) do
     case Enum.reject(
            [
              {length(d.created), "new"},
@@ -149,7 +153,20 @@ defmodule ReactiveDagDashboard.Actions do
     end
   end
 
-  def summarise(%{changed: changed}), do: "#{length(changed)} key(s) changed"
+  # "nothing changed" is an ANSWER, not an absence. Without this clause an empty
+  # list rendered as "0 key(s) changed", which reads as a scan that did
+  # arithmetic rather than one that looked and found the world unmoved.
+  # A run synthesised from telemetry has the COUNT but not the key names, so it
+  # carries the count in `detail` and leaves the list truthfully empty. Reading
+  # it here keeps "3 keys changed" honest on that path without the struct
+  # inventing keys it does not have.
+  def summarise(%{changed: [], detail: %{changed_count: n}}) when n > 0,
+    do: "#{n} key#{if n == 1, do: "", else: "s"} changed"
+
+  def summarise(%{changed: []}), do: "nothing changed"
+
+  def summarise(%{changed: changed}),
+    do: "#{length(changed)} key#{if length(changed) == 1, do: "", else: "s"} changed"
 
   # A scanner may still return `changed:` keyed BY LEAF, marking several cells
   # from one poll — `Source.refresh/3` honours it. Reporting only the cell whose

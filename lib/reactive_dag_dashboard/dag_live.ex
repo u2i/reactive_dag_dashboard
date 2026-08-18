@@ -176,6 +176,17 @@ defmodule ReactiveDagDashboard.DagLive do
     {:noreply, socket |> LiveUpdates.seen_event() |> LiveUpdates.finish()}
   end
 
+  # ONE cell failed; the drain carried on. Marked on the trail rather than
+  # announced as a drain failure — its keys are still dirty and the next drain
+  # retries them, so "this did not run" is the honest reading, not "everything
+  # broke".
+  def handle_info({:cell_failed, cell_id, reason}, socket) do
+    {:noreply,
+     socket
+     |> LiveUpdates.seen_event()
+     |> LiveUpdates.record_step(cell_id, {:failed, reason})}
+  end
+
   def handle_info(:clear_trail, socket), do: {:noreply, LiveUpdates.clear_trail(socket)}
 
   # ── the scan half ───────────────────────────────────────────────────────────

@@ -367,6 +367,26 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       refute body(render(view)) =~ "tok"
     end
 
+    test "a cell that failed WITHOUT failing the drain is shown as not having run" do
+      # The gap this closes: a contained failure is neither a `:step` (it never
+      # recomputed) nor an `:exception` (the drain finished), so without a
+      # handler the page shows a clean drain over a cell that silently stayed
+      # dirty — work that did not happen looking like work that did.
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+
+      :telemetry.execute(
+        [:reactive_dag, :drain, :cell_failed],
+        %{duration_us: 10},
+        %{cell: "category_health", pass: 1, reason: :upstream_down, claimed: ["travel"]}
+      )
+
+      assert render_eventually(view, "did not run")
+
+      # Tinted as a problem, not as a recompute that changed nothing.
+      assert body(render(view)) =~ "rdd-ran-bad"
+    end
+
     test "a failed poll says so rather than going quiet" do
       Observer.attach(@pubsub)
       {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")

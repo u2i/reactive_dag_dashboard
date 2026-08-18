@@ -23,6 +23,7 @@ defmodule ReactiveDagDashboard.Observer do
       {:drain_failed, reason}                when it raised
       {:scan_started, cell_id}               a poll began
       {:scan_progress, cell_id, done, total} a poll advanced
+      {:cell_failed, cell_id, reason}        one cell failed; the drain went on
       {:scan_done, cell_id, result}          a poll finished, changed or not
       {:scan_failed, cell_id, reason}        it raised
 
@@ -55,6 +56,11 @@ defmodule ReactiveDagDashboard.Observer do
     [:reactive_dag, :drain, :step],
     [:reactive_dag, :drain, :stop],
     [:reactive_dag, :drain, :exception],
+    [:reactive_dag, :drain, :cell_failed],
+    # A cell that failed WITHOUT failing the drain. Neither a `:step` (it never
+    # recomputed) nor an `:exception` (the drain finished), so without this a
+    # contained failure produces no event at all and the page shows a clean
+    # drain over a cell that silently stayed dirty.
     # The SCAN half. A poll that finds nothing dirties nothing, so it emits no
     # `:drain, :step` at all — and a page told only about steps cannot tell a
     # scan that found nothing from a scan that never ran. Both looked like the
@@ -115,6 +121,14 @@ defmodule ReactiveDagDashboard.Observer do
 
   def handle([:reactive_dag, :drain, :exception], _measurements, metadata, %{pubsub: pubsub}) do
     broadcast(pubsub, {:drain_failed, metadata.reason})
+  end
+
+  # ONE cell, not the drain. Its keys are still dirty and the next drain retries
+  # them, so this is "this cell did not run", not "the drain broke" — a page
+  # that conflated the two would either understate a broken source or overstate
+  # a transient one.
+  def handle([:reactive_dag, :drain, :cell_failed], _measurements, metadata, %{pubsub: pubsub}) do
+    broadcast(pubsub, {:cell_failed, metadata.cell, metadata.reason})
   end
 
   def handle([:reactive_dag, :scan, :start], _measurements, metadata, %{pubsub: pubsub}) do

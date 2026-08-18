@@ -67,8 +67,8 @@ defmodule ReactiveDagDashboard.Tree do
   Where a change to `id` travels: the full downstream expansion, one branch per
   propagation path.
 
-  This is the leaf's-eye view — `dirties_on` fires on a row, and this is every
-  recompute that follows.
+  This is the leaf's-eye view — `dirties_on` or `augmented_by` fires on a row,
+  and this is every recompute that follows.
   """
   @spec downstream(Plan.t(), String.t()) :: node_t()
   def downstream(%Plan{} = plan, id), do: build(plan, id, &parents_of(plan, &1))

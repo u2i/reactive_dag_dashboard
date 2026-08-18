@@ -249,7 +249,9 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
         %{cell: "expenses", args: %{}, unreachable: [], report: nil}
       )
 
-      assert_receive {:scan_done, "expenses", %{changed: 0, unreachable: []}}
+      # A `%ScanRun{}` now, not a flattened map — the poll and the drain it
+      # triggered, as the worker put them on the event.
+      assert_receive {:scan_done, "expenses", %ReactiveDag.ScanRun{unreachable: []}}
     end
 
     test "a no-op scan leaves a trail saying so" do

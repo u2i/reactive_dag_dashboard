@@ -27,10 +27,10 @@ defmodule ReactiveDagDashboard.Observer do
       {:scan_done, cell_id, result}          a poll finished, changed or not
       {:scan_failed, cell_id, reason}        it raised
 
-  `:scan_done` carries `%{changed:, unreachable:}` because a scan that changed
-  NOTHING is a real outcome and the page has to be able to say so. Without it the
-  only evidence a queued scan ran was a `:drain_step`, which a no-op poll never
-  produces.
+  `:scan_done` carries a `ReactiveDag.ScanRun` — the poll and the drain it
+  triggered — because a scan that changed NOTHING is a real outcome and the page
+  has to be able to say so. Without it the only evidence a queued scan ran was a
+  `:drain_step`, which a no-op poll never produces.
 
   `:drain_step` names the cell and its changed keys, which is what lets a view
   refresh **only that cell** rather than re-reading the graph. That distinction
@@ -145,15 +145,7 @@ defmodule ReactiveDagDashboard.Observer do
   # that spend appears in no drain step: a poll and a drain are separate phases,
   # so this event is the only place it can reach a live page.
   def handle([:reactive_dag, :scan, :stop], measurements, metadata, %{pubsub: pubsub}) do
-    broadcast(
-      pubsub,
-      {:scan_done, metadata.cell,
-       %{
-         changed: Map.get(measurements, :changed, 0),
-         unreachable: Map.get(metadata, :unreachable, []),
-         detail: Map.get(metadata, :detail, %{})
-       }}
-    )
+    broadcast(pubsub, {:scan_done, metadata.cell, scan_run(measurements, metadata)})
   end
 
   def handle([:reactive_dag, :scan, :exception], _measurements, metadata, %{pubsub: pubsub}) do
@@ -169,6 +161,38 @@ defmodule ReactiveDagDashboard.Observer do
       pubsub,
       {:scan_progress, metadata[:cell], measurements.done, measurements[:total]}
     )
+  end
+
+  # The `%ReactiveDag.ScanRun{}` the worker put on the event, whole.
+  #
+  # This used to rebuild a plain map from three of its fields and flatten
+  # `changed` to a COUNT — which cost the queued path its wording. A poll that
+  # reconciles reports `detail:` (`created`/`updated`/`revived`/`retired`), so
+  # the same scan run from the button said "2 new, 1 updated, 1 withdrawn" and
+  # run from a job said "3 keys changed". Same data, two renderers, and the
+  # worse one was the one people use.
+  #
+  # A source that predates the struct — a host on an older library, or a
+  # hand-fired event in a test — still gets a `%ScanRun{}` built from the flat
+  # keys, so one consumer covers both.
+  defp scan_run(_measurements, %{run: %ReactiveDag.ScanRun{} = run}), do: run
+
+  defp scan_run(measurements, metadata) do
+    %ReactiveDag.ScanRun{
+      cell: Map.get(metadata, :cell),
+      # `changed` is a LIST on the struct and the event's measurement is a
+      # COUNT, so a synthesised run cannot fill it honestly — it does not have
+      # the key names. An empty list would claim "nothing changed" over a scan
+      # that changed things, so the count rides in `detail` where a renderer
+      # can find it and the list stays truthfully empty.
+      changed: [],
+      detail:
+        metadata
+        |> Map.get(:detail, %{})
+        |> Map.put_new(:changed_count, Map.get(measurements, :changed, 0)),
+      unreachable: Map.get(metadata, :unreachable, []),
+      report: Map.get(metadata, :report)
+    }
   end
 
   defp broadcast(pubsub, message) do

@@ -48,6 +48,28 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     :ok
   end
 
+  # The live row only — the page also renders finished runs and the cell picker,
+  # so page-wide substring checks answer the wrong question.
+  defp live_row_html(html) do
+    [_, row] = String.split(html, ~s(class="rdd-run rdd-run-live"), parts: 2)
+
+    # Ends at whatever comes next: the prompt when no run has finished, or the
+    # first finished run when one has. Splitting on `</div>` truncated inside
+    # the row itself once it grew a step list.
+    row
+    |> String.split(~s(class="rdd-prompt"), parts: 2)
+    |> hd()
+    |> String.split(~s(<div class="rdd-run">), parts: 2)
+    |> hd()
+  end
+
+  defp index_of(haystack, needle) do
+    case :binary.match(haystack, needle) do
+      {i, _} -> i
+      :nomatch -> flunk("#{needle} is not in the live row")
+    end
+  end
+
   defp drain do
     Drain.run(FixtureGraph.plan(),
       recompute: ReactiveDag.Node.Recompute,
@@ -882,21 +904,24 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       refute html =~ "No drains recorded yet",
              "the empty state must yield to the run that is happening"
 
-      # The wave front moves: newest step wins, so the row names where the
-      # cascade has REACHED, not where it started.
-      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:drain_step, "category_health", ["a"]})
+      # Per-cell, in the expression tab's own vocabulary — not a summary line.
+      assert html =~ "ran · 1 changed"
+
+      Phoenix.PubSub.broadcast(
+        @pubsub,
+        Observer.topic(),
+        {:drain_step, "category_health", ["a", "b"]}
+      )
+
       html = render(view)
 
       assert html =~ "2 cells so far"
 
-      # Isolate the LIVE ROW: both cells are in `activity`, so a page-wide
-      # substring check for the newest name passes even when the row names the
-      # oldest. The claim is about which one this row picked.
-      [_, row] = String.split(html, live_row, parts: 2)
-      [row, _] = String.split(row, "</div>", parts: 2)
-
-      assert row =~ "category_health", "the row names the newest cell..."
-      refute row =~ "expenses", "...not the one the cascade started from"
+      # Both cells are listed, each with what IT did.
+      row = live_row_html(html)
+      assert row =~ "expenses"
+      assert row =~ "category_health"
+      assert row =~ "ran · 2 changed", "each cell reports its own outcome"
 
       # ...and it gives way to the real row once the run is over.
       edit_travel_to(7.0)
@@ -918,19 +943,17 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       Observer.attach(@pubsub)
       {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
 
-      # ORDER MATTERS. Broadcast so that the last step is NOT the one map
-      # iteration happens to yield first, or `max_by` under a full tie returns
-      # the right answer for the wrong reason and an `at`-ordered implementation
-      # passes. With this order `at` picks `budget_gap` and only `seq` picks
-      # `spend_rollup`.
-      ids = ~w(budget_gap category_health expenses spend_rollup)
+      # ORDER MATTERS. `sort_by` is stable, so under a full `at` tie it returns
+      # MAP order — which for these keys is alphabetical. Broadcasting in
+      # alphabetical order would therefore pass against an `at`-ordered
+      # implementation for the wrong reason. This order is deliberately not it.
+      ids = ~w(spend_rollup expenses budget_gap category_health)
 
       for id <- ids do
         Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:drain_step, id, ["*"]})
       end
 
-      [_, row] = String.split(render(view), ~s(class="rdd-run rdd-run-live"), parts: 2)
-      [row, _] = String.split(row, "</div>", parts: 2)
+      row = live_row_html(render(view))
 
       assert row =~ "4 cells so far"
 
@@ -941,12 +964,78 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       ats = activity |> Map.values() |> Enum.map(& &1.at) |> Enum.uniq()
       assert length(ats) == 1, "precondition: all four steps share a millisecond"
 
-      # Name exactly the last one, and none of the others — `=~ "budget_gap"`
-      # alone passed under `at` ordering purely by map-iteration luck.
-      named = Enum.filter(ids, &String.contains?(row, &1))
+      # The steps appear in CASCADE order, oldest first — which under a full
+      # tie is exactly what `at` cannot deliver: map iteration would yield
+      # `budget_gap, category_health, expenses, spend_rollup` regardless of
+      # when each actually arrived.
+      order =
+        ids
+        |> Enum.map(&{&1, index_of(row, &1)})
+        |> Enum.sort_by(&elem(&1, 1))
+        |> Enum.map(&elem(&1, 0))
 
-      assert named == ["spend_rollup"],
-             "the LAST step is the wave front, whatever the clock says"
+      assert order == ids, "the list follows the cascade, whatever the clock says"
+    end
+
+    test "a cell that failed mid-drain says so, in the tree's own words" do
+      # The reason the live row reuses `activity_label/1` rather than printing
+      # its own count. A failed cell did NOT run — its keys are still dirty and
+      # the next drain retries them — and a row that rendered every step as
+      # "ran" would report a failure as a success.
+      Observer.attach(@pubsub)
+      {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
+
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:drain_step, "expenses", ["*"]})
+
+      Phoenix.PubSub.broadcast(
+        @pubsub,
+        Observer.topic(),
+        {:cell_failed, "category_health", :boom}
+      )
+
+      row = live_row_html(render(view))
+
+      assert row =~ "did not run · retrying", "a failure is not a recompute"
+      # The rendered ATTRIBUTE, not the bare class name: the stylesheet is
+      # inlined in the page, so `=~ "rdd-ran-bad"` matches the CSS rule itself
+      # and passes with the tint removed.
+      assert row =~ ~s(class="rdd-ran-badge rdd-ran-bad"),
+             "and it is not tinted like a clean result"
+
+      assert row =~ "ran · 1 changed", "the cell that did run still says so"
+    end
+
+    test "a poll in progress is visible too, not just the drain it triggers" do
+      # A crawl is the SLOWEST thing that happens — minutes, where its drain is
+      # milliseconds — so if anything deserves a live row it is this. `activity`
+      # already carries scan entries for the tree's badges; the log reads the
+      # same map.
+      Observer.attach(@pubsub)
+      {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
+
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:scan_started, "expenses"})
+      assert live_row_html(render(view)) =~ "polling…"
+
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:scan_progress, "expenses", 40, 120})
+      assert live_row_html(render(view)) =~ "polling · 40/120", "with the crawl's own progress"
+    end
+
+    test "a poll and the drain it triggers stay in arrival order" do
+      # Scan and step entries share one `activity` map, so both need a place in
+      # the same total order. Scan entries used to carry no `seq` at all, which
+      # sorted every poll to the front of the list regardless of when it landed.
+      Observer.attach(@pubsub)
+      {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
+
+      # A step FIRST, then the poll — so "poll before step" cannot be right by
+      # arrival, only by the missing-seq bug.
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:drain_step, "spend_rollup", ["a"]})
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:scan_progress, "expenses", 7, 9})
+
+      row = live_row_html(render(view))
+
+      assert index_of(row, "spend_rollup") < index_of(row, "polling · 7/9"),
+             "the poll sits where it arrived, not pinned to the top"
     end
 
     test "the log is reachable with no cell selected" do

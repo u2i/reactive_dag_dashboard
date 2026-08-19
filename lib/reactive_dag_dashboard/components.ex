@@ -417,6 +417,11 @@ defmodule ReactiveDagDashboard.Components do
       .rdd-run-live .rdd-run-head { cursor: default }
       .rdd-run-live .rdd-run-head:hover { background: transparent }
       .rdd-live-dot { color: var(--measured); font-size: 9px; animation: rdd-pulse 1.4s ease-in-out infinite }
+      /* The steps arrive one at a time and the newest is at the BOTTOM, so a
+         long cascade grows past the fold. Capped and scrolled rather than
+         allowed to push the finished runs off the page. */
+      .rdd-live-steps { max-height: 240px; overflow-y: auto }
+      .rdd-live-step { border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent) }
       @keyframes rdd-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .25 } }
       @media (prefers-reduced-motion: reduce) {
         .rdd-live-dot { animation: none }
@@ -1023,8 +1028,29 @@ defmodule ReactiveDagDashboard.Components do
           <span class="rdd-live-dot">●</span>
           <span class="rdd-run-at">running</span>
           <span class="rdd-run-sum">
-            <%= map_size(@activity) %> cell<%= plural(map_size(@activity)) %> so far<%= live_tail(@activity) %>
+            <%= map_size(@activity) %> cell<%= plural(map_size(@activity)) %> so far
           </span>
+        </div>
+
+        <%!-- The steps so far, in the order they arrived — NOT a summary line.
+              The expression tab already answers "what did each cell do" with a
+              badge per row, in a vocabulary that distinguishes a recompute from
+              a poll and both from a failure. A live row that said only
+              "4 cells · spend_rollup" made the reader hold the cascade in their
+              head and threw away the per-cell outcome the events carry.
+
+              `activity_label/1` and `activity_class/1` are the SAME functions
+              the tree badges use, so the two views cannot drift into two
+              vocabularies for one event. No tree here: the parent edge is in the
+              report, and there is no report until the drain ends — arrival order
+              is the honest structure while it runs. --%>
+        <div class="rdd-run-steps rdd-live-steps">
+          <div :for={{id, entry} <- live_steps(@activity)} class="rdd-step rdd-live-step">
+            <span class="rdd-step-cell"><%= id %></span>
+            <span class={["rdd-ran-badge", activity_class(entry)]}>
+              <%= activity_label(entry) %>
+            </span>
+          </div>
         </div>
       </div>
 
@@ -1183,19 +1209,13 @@ defmodule ReactiveDagDashboard.Components do
   defp plural(1), do: ""
   defp plural(_), do: "s"
 
-  # The wave front. A bare cell COUNT climbing on its own says work is happening
-  # but not what; naming the latest cell is what makes a long cascade legible
-  # while it runs.
+  # The steps so far, oldest first — the order the cascade actually travelled,
+  # so the newest is at the bottom where the eye already is.
   #
   # By `seq`, NOT `at`: a drain recomputes many cells inside one millisecond, so
   # ordering a fast cascade by its ms timestamps is a tie broken arbitrarily by
-  # map order — which named a cell at random on exactly the runs this row is for.
-  defp live_tail(activity) when map_size(activity) == 0, do: ""
-
-  defp live_tail(activity) do
-    {id, _} = Enum.max_by(activity, fn {_id, entry} -> entry[:seq] || 0 end)
-    " · " <> id
-  end
+  # map order, which shuffled the list on exactly the runs this is for.
+  defp live_steps(activity), do: Enum.sort_by(activity, fn {_id, e} -> e[:seq] || 0 end)
 
   # The library's fold, not our own: a step's cost here and the same step's cost
   # in a drain total are ONE fold rather than two that have to agree.

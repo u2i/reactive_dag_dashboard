@@ -154,7 +154,12 @@ defmodule ReactiveDagDashboard.LiveUpdates do
   def record_scan(socket, cell_id, state), do: put_scan(socket, cell_id, state)
 
   defp put_scan(socket, cell_id, state) do
-    entry = %{scan: state, at: System.monotonic_time(:millisecond)}
+    # `seq` here too, for the same reason `record_step/3` has one: a poll and the
+    # drain it triggers land in one `activity` map, and anything reading them in
+    # order needs a total one. Without it every scan entry sorted as seq 0 and a
+    # poll rendered ahead of steps that arrived before it.
+    seq = socket.assigns.step_seq
+    entry = %{scan: state, at: System.monotonic_time(:millisecond), seq: seq}
 
     socket =
       Phoenix.Component.assign(
@@ -162,6 +167,8 @@ defmodule ReactiveDagDashboard.LiveUpdates do
         :activity,
         Map.update(socket.assigns.activity, cell_id, entry, &Map.merge(&1, entry))
       )
+
+    socket = Phoenix.Component.assign(socket, :step_seq, seq + 1)
 
     # A finished scan schedules the trail to expire, like a finished drain: the
     # run you just watched is the one whose result you want to read, and a no-op

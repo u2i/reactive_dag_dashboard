@@ -289,83 +289,83 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     # page. A crawler that classifies each new document with a model spends on
     # every poll, and without this none of it is visible anywhere.
     test "the poll's cost is reported alongside what it found" do
-        Observer.attach(@pubsub)
-        {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
 
-        :telemetry.execute(
-          [:reactive_dag, :scan, :stop],
-          %{duration_us: 10, changed: 2, passes: 1},
-          %{
-            cell: "expenses",
-            args: %{},
-            unreachable: [],
-            detail: %{tokens_in: %{"haiku" => 900}, tokens_out: %{"haiku" => 200}, llm_calls: 3},
-            report: nil
-          }
-        )
+      :telemetry.execute(
+        [:reactive_dag, :scan, :stop],
+        %{duration_us: 10, changed: 2, passes: 1},
+        %{
+          cell: "expenses",
+          args: %{},
+          unreachable: [],
+          detail: %{tokens_in: %{"haiku" => 900}, tokens_out: %{"haiku" => 200}, llm_calls: 3},
+          report: nil
+        }
+      )
 
-        assert render_eventually(view, "1.1k tok")
-        assert body(render(view)) =~ "3 calls"
-      end
+      assert render_eventually(view, "1.1k tok")
+      assert body(render(view)) =~ "3 calls"
+    end
 
-      test "a scan that changed nothing can still have cost something" do
-        # The reason cost is a separate axis from findings: classifying a
-        # document that turns out to be unchanged costs exactly as much as one
-        # that changed, and "nothing changed" alone reads as "this was free".
-        Observer.attach(@pubsub)
-        {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+    test "a scan that changed nothing can still have cost something" do
+      # The reason cost is a separate axis from findings: classifying a
+      # document that turns out to be unchanged costs exactly as much as one
+      # that changed, and "nothing changed" alone reads as "this was free".
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
 
-        :telemetry.execute(
-          [:reactive_dag, :scan, :stop],
-          %{duration_us: 10, changed: 0, passes: 1},
-          %{
-            cell: "expenses",
-            args: %{},
-            unreachable: [],
-            detail: %{tokens_in: 450, llm_calls: 1},
-            report: nil
-          }
-        )
+      :telemetry.execute(
+        [:reactive_dag, :scan, :stop],
+        %{duration_us: 10, changed: 0, passes: 1},
+        %{
+          cell: "expenses",
+          args: %{},
+          unreachable: [],
+          detail: %{tokens_in: 450, llm_calls: 1},
+          report: nil
+        }
+      )
 
-        assert render_eventually(view, "450 tok")
-        assert body(render(view)) =~ "nothing changed"
-      end
+      assert render_eventually(view, "450 tok")
+      assert body(render(view)) =~ "nothing changed"
+    end
 
-      test "cache hits are reported even when nothing was spent" do
-        # A crawl over hundreds of documents that spent nothing BECAUSE the
-        # cache held is the change detection working, not a crawl that did
-        # nothing — and the two look identical without this.
-        Observer.attach(@pubsub)
-        {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+    test "cache hits are reported even when nothing was spent" do
+      # A crawl over hundreds of documents that spent nothing BECAUSE the
+      # cache held is the change detection working, not a crawl that did
+      # nothing — and the two look identical without this.
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
 
-        :telemetry.execute(
-          [:reactive_dag, :scan, :stop],
-          %{duration_us: 10, changed: 0, passes: 1},
-          %{
-            cell: "expenses",
-            args: %{},
-            unreachable: [],
-            detail: %{cache_hits: 712, llm_calls: 0},
-            report: nil
-          }
-        )
+      :telemetry.execute(
+        [:reactive_dag, :scan, :stop],
+        %{duration_us: 10, changed: 0, passes: 1},
+        %{
+          cell: "expenses",
+          args: %{},
+          unreachable: [],
+          detail: %{cache_hits: 712, llm_calls: 0},
+          report: nil
+        }
+      )
 
-        assert render_eventually(view, "712 cached")
-      end
+      assert render_eventually(view, "712 cached")
+    end
 
-      test "a poll that reports no detail says nothing about cost" do
-        # No reassuring "0 tok" on every plain fetch: a crawler that does not
-        # spend should not have a cost line at all.
-        Observer.attach(@pubsub)
-        {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
+    test "a poll that reports no detail says nothing about cost" do
+      # No reassuring "0 tok" on every plain fetch: a crawler that does not
+      # spend should not have a cost line at all.
+      Observer.attach(@pubsub)
+      {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
 
-        :telemetry.execute(
-          [:reactive_dag, :scan, :stop],
-          %{duration_us: 10, changed: 1, passes: 1},
-          %{cell: "expenses", args: %{}, unreachable: [], detail: %{}, report: nil}
-        )
+      :telemetry.execute(
+        [:reactive_dag, :scan, :stop],
+        %{duration_us: 10, changed: 1, passes: 1},
+        %{cell: "expenses", args: %{}, unreachable: [], detail: %{}, report: nil}
+      )
 
-        assert render_eventually(view, "1 key changed")
+      assert render_eventually(view, "1 key changed")
       refute body(render(view)) =~ "tok"
     end
 
@@ -744,31 +744,61 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       # Nothing was dirty. That is a real outcome and blank space reads as a
       # broken panel, so the run states it.
       ReactiveDag.Insights.forget_runs()
-      ReactiveDag.Insights.record(%ReactiveDag.Drain.Report{passes: 0, duration_us: 40, steps: []})
+
+      ReactiveDag.Insights.record(%ReactiveDag.Drain.Report{
+        passes: 0,
+        duration_us: 40,
+        steps: []
+      })
 
       {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
 
       assert html =~ "recomputed no cells", "an empty drain explains itself"
     end
 
-    test "`runs` sits apart from the node-view pair" do
+    test "`runs` is in the page header, outside the node funnel" do
       # The functional half is below — reachable without a cell. This is the
-      # VISUAL claim: `expression` and `graph` are two views of the selected
-      # node, `runs` is a list of drains, and three buttons in one nav read as
-      # three views of one thing. So `runs` leaves the nav and takes the bar's
-      # far end.
+      # VISUAL claim, and it is about the whole page, not one nav.
+      #
+      # The page is a funnel: `rdd-ask` (which question) → `rdd-starts` (which
+      # cell) → `rdd-bar` (which view of it). Each row narrows the one above.
+      # `runs` answers none of those — it lists DRAINS — so it belongs outside
+      # the funnel entirely, beside the title.
+      #
+      # An earlier revision only left the `<nav>` and took the bar's far end.
+      # That satisfied "outside the nav" and still read as a third view of the
+      # node, so this test pins the region, not the nav.
       {:ok, _view, html} = live(build_conn(), @path)
 
       assert html =~ "rdd-tab-runs", "the runs button carries its own placement class"
 
-      # ...and it is NOT inside the tab nav. Everything between `<nav>` and its
-      # close is the node-view pair; `runs` must not be in there.
+      [head, rest] = String.split(html, "</header>", parts: 2)
+      assert head =~ "rdd-tab-runs", "runs belongs beside the title"
+      refute rest =~ "rdd-tab-runs", "runs appears once, in the header — not also below it"
+
+      # ...and no row of the funnel contains it.
+      for {region, opener} <- [
+            {"the view bar", ~s(<div class="rdd-bar">)},
+            {"the cell picker", ~s(<div class="rdd-starts">)},
+            {"the direction pair", ~s(<div class="rdd-ask">)}
+          ] do
+        assert String.contains?(rest, opener), "#{region} vanished; update this test"
+
+        [_, region_html] = String.split(rest, opener, parts: 2)
+
+        refute region_html |> String.split("</div>", parts: 2) |> hd() =~ "runs",
+               "runs is a list of drains, not a narrowing inside #{region}"
+      end
+    end
+
+    test "`expression` and `graph` remain the node-view pair" do
+      {:ok, _view, html} = live(build_conn(), @path)
+
       [_, nav] = String.split(html, ~s(<nav class="rdd-tabs">), parts: 2)
       [nav, _] = String.split(nav, "</nav>", parts: 2)
 
       assert nav =~ "expression"
       assert nav =~ "graph"
-      refute nav =~ "runs", "runs is a list of drains, not a third view of the node"
     end
 
     test "the log is reachable with no cell selected" do

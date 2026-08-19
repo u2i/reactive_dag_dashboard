@@ -184,12 +184,16 @@ defmodule ReactiveDagDashboard.Components do
       .rdd-bar-acts { display: flex; gap: 6px; margin-left: 4px }
       .rdd-routes { margin-left: auto; font-size: 11px; color: var(--faint);
                     font-variant-numeric: tabular-nums; font-family: ui-monospace, monospace }
-      /* `runs` sits at the bar's far end, apart from the node-view pair: it lists
-         DRAINS, not a view of the selected cell. `auto` on both this and
-         `.rdd-routes` is deliberate — the route count is conditional, so the
-         first `auto` in the row may be either one, and whichever it is pushes
-         the rest right. */
-      .rdd-tab-runs { margin-left: auto }
+      /* `runs` sits in the page HEADER, beside the title — not in the view bar
+         with `expression`/`graph`, and not anywhere else in the funnel of
+         question → cell → view. It lists DRAINS: a destination, not a narrowing
+         of the cell you picked.
+
+         `.rdd-head` is `align-items: baseline`, which would hang a bordered
+         button off the title's baseline and sit it low; `align-self: center`
+         opts this one child out. No `margin-left: auto` — the header is
+         `space-between` and this is its last child. */
+      .rdd-tab-runs { align-self: center }
 
       .rdd-picker { position: relative }
       .rdd-pick { font: inherit; font-family: ui-monospace, monospace; font-size: 12.5px;
@@ -524,7 +528,6 @@ defmodule ReactiveDagDashboard.Components do
     </style>
     """
   end
-
 
   attr(:node, :map, required: true)
   attr(:status, :map, required: true)
@@ -906,6 +909,7 @@ defmodule ReactiveDagDashboard.Components do
 
   # A failure and an outage are not successes and must not be tinted like one.
   defp activity_class(%{changed: {:failed, _reason}}), do: "rdd-ran-bad"
+
   defp activity_class(%{scan: %ReactiveDag.ScanRun{} = run}),
     do: unless(ReactiveDag.ScanRun.complete?(run), do: "rdd-ran-bad")
 

@@ -460,7 +460,10 @@ defmodule ReactiveDagDashboard.DagLive do
       # reach it.
       not_reached:
         if changed == 0 do
-          plan.parents |> Map.get(cell, []) |> Enum.reject(&MapSet.member?(ran, &1)) |> Enum.sort()
+          plan.parents
+          |> Map.get(cell, [])
+          |> Enum.reject(&MapSet.member?(ran, &1))
+          |> Enum.sort()
         else
           []
         end,
@@ -600,11 +603,28 @@ defmodule ReactiveDagDashboard.DagLive do
             layout, so overriding it silently dropped every rule. --%>
       <.styles />
 
+      <%!-- `runs` lives HERE, in the page header, not down in the view bar.
+
+            The three rows below are a funnel: which question (`rdd-ask`), which
+            cell (`rdd-starts`), which view of it (`rdd-bar`). Each narrows the
+            one above. `runs` answers none of those — it is a list of drains, a
+            different destination — so anywhere inside the funnel reads as a
+            further narrowing, and it read that way at the end of the third row
+            just as it did in the middle of it. Being a sibling of the title is
+            the honest position: page, not node. --%>
       <header class="rdd-head">
         <h1>reactive_dag</h1>
         <span class={["rdd-badge", (@live? && "rdd-b-ok") || "rdd-b-mute"]}>
           <%= if @live?, do: "live", else: "polling" %>
         </span>
+
+        <button
+          class={["rdd-tab", "rdd-tab-runs", @view == :log && "on"]}
+          phx-click="view"
+          phx-value-to="log"
+        >
+          runs
+        </button>
       </header>
 
       <div :if={@message} class="rdd-alert"><%= @message %></div>
@@ -648,19 +668,10 @@ defmodule ReactiveDagDashboard.DagLive do
         </button>
       </div>
 
-      <%!-- OUTSIDE the `@root` guard: `runs` is not node-scoped, so asking to see
-            it must not require having first chosen a cell.
-
-            And it sits apart from the pair, at the bar's other end. `expression`
-            and `graph` are two views of the SELECTED NODE; `runs` is a list of
-            drains. Side by side in one nav they read as three views of one
-            thing — which is what the `@view != :log` guards below keep having to
-            deny, suppressing the route count, the pick-a-node prompt and the
-            dead-end notice whenever the log is showing.
-
-            Those guards stay: they are about what the log DISPLACES, not about
-            where its button sits. What moves is the claim the layout makes —
-            two node views on the left, a list of runs at the far end. --%>
+      <%!-- Two views of the SELECTED NODE. `runs` used to sit here too and does
+            not belong: see the header. The `@view != :log` guards below stay
+            regardless — they are about what the runs list DISPLACES on the page,
+            not about where its button lives. --%>
       <div class="rdd-bar">
         <nav class="rdd-tabs">
           <button class={["rdd-tab", @view == :tree && "on"]} phx-click="view" phx-value-to="tree">
@@ -674,14 +685,6 @@ defmodule ReactiveDagDashboard.DagLive do
         <span :if={@root && @view != :log} class="rdd-routes">
           <%= @routes %> route<%= if @routes == 1, do: "", else: "s" %>
         </span>
-
-        <button
-          class={["rdd-tab", "rdd-tab-runs", @view == :log && "on"]}
-          phx-click="view"
-          phx-value-to="log"
-        >
-          runs
-        </button>
       </div>
 
       <p :if={is_nil(@root) and @view != :log} class="rdd-prompt">

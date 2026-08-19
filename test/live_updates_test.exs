@@ -523,6 +523,26 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert html =~ "changed"
     end
 
+    test "`runs` sits apart from the node-view pair" do
+      # The functional half is below — reachable without a cell. This is the
+      # VISUAL claim: `expression` and `graph` are two views of the selected
+      # node, `runs` is a list of drains, and three buttons in one nav read as
+      # three views of one thing. So `runs` leaves the nav and takes the bar's
+      # far end.
+      {:ok, _view, html} = live(build_conn(), @path)
+
+      assert html =~ "rdd-tab-runs", "the runs button carries its own placement class"
+
+      # ...and it is NOT inside the tab nav. Everything between `<nav>` and its
+      # close is the node-view pair; `runs` must not be in there.
+      [_, nav] = String.split(html, ~s(<nav class="rdd-tabs">), parts: 2)
+      [nav, _] = String.split(nav, "</nav>", parts: 2)
+
+      assert nav =~ "expression"
+      assert nav =~ "graph"
+      refute nav =~ "runs", "runs is a list of drains, not a third view of the node"
+    end
+
     test "the log is reachable with no cell selected" do
       # A run is not a property of a node, so asking to see the log must not
       # require having first chosen one to look at.

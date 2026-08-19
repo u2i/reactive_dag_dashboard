@@ -134,7 +134,7 @@ defmodule ReactiveDagDashboard.Components do
                    padding: 9px 13px; margin-bottom: 14px; font-size: 12.5px;
                    color: var(--dim); max-width: 1080px }
 
-      .rdd-tabs { display: flex; gap: 3px; margin-bottom: 16px }
+      .rdd-tabs { display: flex; gap: 3px }
       .rdd-tab { font: inherit; font-size: 11px; font-weight: 700; letter-spacing: .07em;
                  text-transform: uppercase; color: var(--faint); background: none;
                  border: 1px solid transparent; padding: 4px 11px; cursor: pointer;
@@ -184,6 +184,12 @@ defmodule ReactiveDagDashboard.Components do
       .rdd-bar-acts { display: flex; gap: 6px; margin-left: 4px }
       .rdd-routes { margin-left: auto; font-size: 11px; color: var(--faint);
                     font-variant-numeric: tabular-nums; font-family: ui-monospace, monospace }
+      /* `runs` sits at the bar's far end, apart from the node-view pair: it lists
+         DRAINS, not a view of the selected cell. `auto` on both this and
+         `.rdd-routes` is deliberate — the route count is conditional, so the
+         first `auto` in the row may be either one, and whichever it is pushes
+         the rest right. */
+      .rdd-tab-runs { margin-left: auto }
 
       .rdd-picker { position: relative }
       .rdd-pick { font: inherit; font-family: ui-monospace, monospace; font-size: 12.5px;

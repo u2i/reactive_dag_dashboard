@@ -507,9 +507,19 @@ defmodule ReactiveDagDashboard.DagLive do
         </button>
       </div>
 
-      <%!-- The tab bar is OUTSIDE the `@root` guard, because the log is not
-            node-scoped: it is a list of runs, and asking to see it should not
-            require having first chosen a cell to look at. --%>
+      <%!-- OUTSIDE the `@root` guard: `runs` is not node-scoped, so asking to see
+            it must not require having first chosen a cell.
+
+            And it sits apart from the pair, at the bar's other end. `expression`
+            and `graph` are two views of the SELECTED NODE; `runs` is a list of
+            drains. Side by side in one nav they read as three views of one
+            thing — which is what the `@view != :log` guards below keep having to
+            deny, suppressing the route count, the pick-a-node prompt and the
+            dead-end notice whenever the log is showing.
+
+            Those guards stay: they are about what the log DISPLACES, not about
+            where its button sits. What moves is the claim the layout makes —
+            two node views on the left, a list of runs at the far end. --%>
       <div class="rdd-bar">
         <nav class="rdd-tabs">
           <button class={["rdd-tab", @view == :tree && "on"]} phx-click="view" phx-value-to="tree">
@@ -518,14 +528,19 @@ defmodule ReactiveDagDashboard.DagLive do
           <button class={["rdd-tab", @view == :graph && "on"]} phx-click="view" phx-value-to="graph">
             graph
           </button>
-          <button class={["rdd-tab", @view == :log && "on"]} phx-click="view" phx-value-to="log">
-            log
-          </button>
         </nav>
 
         <span :if={@root && @view != :log} class="rdd-routes">
           <%= @routes %> route<%= if @routes == 1, do: "", else: "s" %>
         </span>
+
+        <button
+          class={["rdd-tab", "rdd-tab-runs", @view == :log && "on"]}
+          phx-click="view"
+          phx-value-to="log"
+        >
+          runs
+        </button>
       </div>
 
       <p :if={is_nil(@root) and @view != :log} class="rdd-prompt">

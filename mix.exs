@@ -62,6 +62,15 @@ defmodule ReactiveDagDashboard.MixProject do
       # It was `== 0.17.0-rc.N` on the belief that `~>` could not match a
       # pre-release at all. That is not so, and the exact pin meant a PR here per
       # library release even when nothing in this dashboard cared.
+      # rc.40 for `Insights` retaining whole RUNS rather than the bare drain
+      # report inside them. The log reads `run.duration_us` (the poll, which is
+      # usually most of a scan's wall time — a two-minute crawl used to log as
+      # its drain's few ms), `run.unreachable` (a scan that could not LOOK must
+      # never render as one that found nothing) and `ScanRun.total/2` (cost
+      # across both phases). Against rc.39 the buffer holds a bare `%Report{}`,
+      # so `recent/1`'s entries have no `:run` key at all and the log cannot be
+      # built — a hard break rather than a silently missing feature.
+      #
       # rc.39 for `compare:` — the columns a node counts as its RESULT. The node
       # drawer reads `cell.meta[:compare]`, which an older library never stamps,
       # so the section would render "every column" for a node that declares a
@@ -82,7 +91,7 @@ defmodule ReactiveDagDashboard.MixProject do
       #   rc.27 — `Source.progress/3`; against rc.26 the fixture scanner could
       #           not emit it, so the tests passed on hand-fired telemetry
       #           while the real path went untested.
-      {:reactive_dag, "~> 0.17.0-rc.39"},
+      {:reactive_dag, "~> 0.17.0-rc.40"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

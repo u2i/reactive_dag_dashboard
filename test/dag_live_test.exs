@@ -35,7 +35,7 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     Application.put_env(:reactive_dag, :repo, ReactiveDagDashboard.FakeRepo)
     on_exit(fn -> Application.put_env(:reactive_dag, :repo, prev) end)
 
-    ReactiveDag.Insights.forget_reports()
+    ReactiveDag.Insights.forget_runs()
     FixtureGraph.seed()
     :ok
   end

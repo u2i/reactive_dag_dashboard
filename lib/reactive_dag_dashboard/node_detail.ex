@@ -194,10 +194,19 @@ defmodule ReactiveDagDashboard.NodeDetail do
   @spec recent_steps(String.t(), pos_integer()) :: [map()]
   def recent_steps(cell_id, limit \\ @recent_steps) do
     Insights.recent(:all)
-    |> Enum.flat_map(fn %{report: report, at: at} ->
-      report.steps
-      |> Enum.filter(&(&1.cell == cell_id))
-      |> Enum.map(&Map.put(&1, :at, at))
+    |> Enum.flat_map(fn %{run: run, at: at} ->
+      # A retained run is a `%ScanRun{}` whether or not a poll produced it, and
+      # its `report` is nil for a scan that never drained — an unscannable
+      # source completes without recomputing anything. No drain, no steps.
+      case run.report do
+        nil ->
+          []
+
+        report ->
+          report.steps
+          |> Enum.filter(&(&1.cell == cell_id))
+          |> Enum.map(&Map.put(&1, :at, at))
+      end
     end)
     |> Enum.take(limit)
   end

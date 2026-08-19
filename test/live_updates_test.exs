@@ -523,6 +523,234 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert html =~ "changed"
     end
 
+    test "a run renders as a tree, with each cell nested under its trigger" do
+      # The re-shaping, driven by a real drain: `expenses` is the seeded root
+      # and `category_health` / `spend_rollup` / `expense_notes` hang off it.
+      # A flat list said so only in an `after expenses` suffix per row; the tree
+      # says it structurally, so a fan-out of three READS as a fan-out.
+      ReactiveDag.Insights.forget_runs()
+      edit_travel_to(4242.0)
+      Frontier.mark_dirty("expenses", ["*"], "edit")
+      {:ok, report} = drain()
+      ReactiveDag.Insights.record(report)
+
+      {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
+      steps = view |> element(".rdd-run-steps") |> render()
+
+      # the containment wrapper exists at all — the whole shape claim
+      assert steps =~ "rdd-skids", "children live in a wrapper inside the parent"
+
+      # ...and `category_health` is INSIDE the root's children wrapper rather
+      # than a sibling of it. Splitting on the wrapper proves nesting; a bare
+      # `steps =~ "category_health"` passed on the flat list too.
+      [before_kids, in_kids] = String.split(steps, ~s(class="rdd-skids"), parts: 2)
+
+      assert before_kids =~ "expenses", "the root sits above its children wrapper"
+      assert in_kids =~ "category_health", "and its triggered cells sit inside it"
+      assert in_kids =~ "spend_rollup"
+    end
+
+    test "a cell that changed nothing is visibly distinct from one that changed something" do
+      # The user's "except where there is no need to run", at the row level.
+      # In this drain `expenses` moves and `category_health` recomputes to the
+      # same verdict — so one propagated and one did not, and the log has to
+      # tell them apart rather than rendering both as "ran".
+      ReactiveDag.Insights.forget_runs()
+      edit_travel_to(4242.0)
+      Frontier.mark_dirty("expenses", ["*"], "edit")
+      {:ok, report} = drain()
+      ReactiveDag.Insights.record(report)
+
+      # the fixture has to actually contain both states, or this proves nothing
+      changed_none = Enum.filter(report.steps, &(&1.changed == []))
+      changed_some = Enum.filter(report.steps, &(&1.changed != []))
+      assert changed_none != [], "the drain must contain a cell that stopped"
+      assert changed_some != [], "and one that propagated"
+
+      {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
+      steps = view |> element(".rdd-run-steps") |> render()
+
+      assert steps =~ "stopped here", "a cell that changed nothing says so"
+      assert steps =~ "changed", "and one that did still reports its count"
+
+      # the two states carry DIFFERENT markup, which is what makes them
+      # distinguishable on screen rather than only in the text
+      assert steps =~ "rdd-step-stopped"
+      assert steps =~ "rdd-step-changed"
+    end
+
+    test "the boundary is visible — a stopped cell names what it did not reach" do
+      # The information a flat list cannot carry. `expense_notes` recomputes and
+      # changes nothing here, so `published`-style downstream work never
+      # happens; the run must say WHERE it stopped rather than leaving the
+      # absence to be inferred.
+      #
+      # Hand-built so the boundary is unambiguous: a real drain over this
+      # fixture reaches the diamond's tip by the other branch, which is the
+      # correct behaviour tested below and the wrong shape for pinning THIS.
+      report = %ReactiveDag.Drain.Report{
+        passes: 2,
+        duration_us: 1_000,
+        steps: [
+          %{
+            cell: "expenses",
+            pass: 0,
+            claimed: ["*"],
+            changed: ["e1"],
+            triggered_by: nil,
+            duration_us: 100,
+            op: nil,
+            meta: %{}
+          },
+          # recomputed, changed NOTHING — so `all_verdicts` below it never ran
+          %{
+            cell: "category_health",
+            pass: 1,
+            claimed: ["*"],
+            changed: [],
+            triggered_by: "expenses",
+            duration_us: 100,
+            op: :check,
+            meta: %{}
+          }
+        ]
+      }
+
+      ReactiveDag.Insights.forget_runs()
+      ReactiveDag.Insights.record(report)
+
+      {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
+      steps = view |> element(".rdd-run-steps") |> render()
+
+      assert steps =~ "not reached", "the cascade's edge is drawn, not left blank"
+
+      assert steps =~ "all_verdicts",
+             "and it NAMES the cell that never ran — a count alone would not say which"
+
+      assert steps =~ "rdd-step-unrun", "drawn apart from the cells that did run"
+
+      # ONE ring, not the whole downstream tree: `verdict_audit` is below
+      # `all_verdicts` and must not be drawn. A 3-cell drain in a 33-cell graph
+      # would otherwise render the graph's static shape in grey and bury the
+      # work that actually happened.
+      refute steps =~ "verdict_audit",
+             "un-run cells stop at one ring — beyond it is the downstream view's job"
+    end
+
+    test "a cell reached by another branch is not called unreached" do
+      # The trap in drawing the boundary from `plan.parents`: `all_verdicts` has
+      # two inputs, so when `category_health` stops but `spend_rollup` changes,
+      # `all_verdicts` DOES run. Listing it as "not reached" under the branch
+      # that stopped would be a false statement about a cell on screen.
+      ReactiveDag.Insights.forget_runs()
+      edit_travel_to(4242.0)
+      Frontier.mark_dirty("expenses", ["*"], "edit")
+      {:ok, report} = drain()
+      ReactiveDag.Insights.record(report)
+
+      # the drain really does have this shape, or the test is vacuous
+      assert Enum.any?(report.steps, &(&1.cell == "category_health" and &1.changed == []))
+      assert Enum.any?(report.steps, &(&1.cell == "all_verdicts"))
+
+      {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
+      steps = view |> element(".rdd-run-steps") |> render()
+
+      # `all_verdicts` ran, so it must not appear in an un-run row. Scoped to
+      # the unrun class rather than the whole panel, since the cell legitimately
+      # appears as a step of its own.
+      unrun =
+        steps
+        |> String.split(~s(rdd-step rdd-step-unrun))
+        |> Enum.drop(1)
+        |> Enum.join()
+
+      refute unrun =~ "all_verdicts",
+             "it ran via spend_rollup — naming it unreached would contradict its own row"
+    end
+
+    test "a scan reports the POLL's duration, not just its drain's" do
+      # The regression the library change exists to fix: the buffer used to hold
+      # the bare report, so a two-minute crawl logged as its drain's few
+      # milliseconds. The poll is usually the larger half and it is now the
+      # number on the row.
+      ReactiveDag.Insights.forget_runs()
+
+      ReactiveDag.Insights.record(%ReactiveDag.ScanRun{
+        cell: "expenses",
+        changed: ["e1"],
+        # two minutes of polling around a 5ms drain
+        duration_us: 120_000_000,
+        report: %ReactiveDag.Drain.Report{passes: 1, duration_us: 5_000, steps: []}
+      })
+
+      {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
+
+      assert html =~ "2m00s", "the WHOLE run — the poll is most of it"
+      assert html =~ "drain 5.0ms", "with the drain's own share beside it"
+      assert html =~ "scan expenses", "and the run names the cell it polled"
+      assert html =~ "1 found", "and what the poll itself turned up"
+    end
+
+    test "a scan that could not reach an upstream does not read as a clean run" do
+      # The honest-gap discipline, which the observer had reintroduced: a scan
+      # that could not LOOK logged identically to one that looked and found
+      # nothing. Those are different sentences and the log must not merge them.
+      ReactiveDag.Insights.forget_runs()
+
+      ReactiveDag.Insights.record(%ReactiveDag.ScanRun{
+        cell: "expenses",
+        changed: [],
+        unreachable: [{"archive", :timeout}],
+        duration_us: 9_000,
+        report: %ReactiveDag.Drain.Report{passes: 1, duration_us: 5_000, steps: []}
+      })
+
+      {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
+
+      assert html =~ "1 unreachable", "the gap is stated on the run"
+
+      assert html =~ ~s(class="rdd-run-gap"),
+             "and marked as a gap rather than as one more count"
+
+      # the upstream is NAMED — which one was down is the actionable half
+      assert html =~ "archive", "the unreachable upstream is named"
+    end
+
+    test "a scan that never drained renders as itself, not as a broken drain" do
+      # An unscannable source (no credential, integration off) is a COMPLETED
+      # scan that found nothing, and it now produces a row where it used to
+      # record nothing at all. `report` is nil, so every drain-side number has
+      # to be nil-safe and the panel must not imply a drain that never ran.
+      ReactiveDag.Insights.forget_runs()
+
+      ReactiveDag.Insights.record(%ReactiveDag.ScanRun{
+        cell: "expenses",
+        changed: [],
+        not_scannable: :no_credential,
+        duration_us: 3_000,
+        report: nil
+      })
+
+      {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
+
+      assert html =~ "rdd-run", "the run is still logged"
+      assert html =~ "scan expenses", "and says what it polled"
+
+      assert html =~ "no drain ran",
+             "a scan with no drain says so, rather than showing an empty cascade"
+    end
+
+    test "a run with no steps says so, rather than rendering an empty tree" do
+      # Nothing was dirty. That is a real outcome and blank space reads as a
+      # broken panel, so the run states it.
+      ReactiveDag.Insights.forget_runs()
+      ReactiveDag.Insights.record(%ReactiveDag.Drain.Report{passes: 0, duration_us: 40, steps: []})
+
+      {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
+
+      assert html =~ "recomputed no cells", "an empty drain explains itself"
+    end
+
     test "`runs` sits apart from the node-view pair" do
       # The functional half is below — reachable without a cell. This is the
       # VISUAL claim: `expression` and `graph` are two views of the selected
@@ -552,7 +780,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     end
 
     test "it says so when nothing has run yet" do
-      ReactiveDag.Insights.forget_reports()
+      ReactiveDag.Insights.forget_runs()
 
       {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
 
@@ -590,7 +818,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
         ]
       }
 
-      ReactiveDag.Insights.forget_reports()
+      ReactiveDag.Insights.forget_runs()
       ReactiveDag.Insights.record(report)
 
       {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
@@ -605,7 +833,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       # The cost question a single number cannot answer: models differ in price
       # by an order of magnitude, so "which model spent this" is what turns a
       # token count into a bill.
-      ReactiveDag.Insights.forget_reports()
+      ReactiveDag.Insights.forget_runs()
       ReactiveDag.Insights.record(report_with_models())
 
       {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
@@ -637,7 +865,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
         ]
       }
 
-      ReactiveDag.Insights.forget_reports()
+      ReactiveDag.Insights.forget_runs()
       ReactiveDag.Insights.record(report)
 
       {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
@@ -659,7 +887,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       # roll-up alone — in this fixture the run total and the one LLM step's
       # total are the same number, so the assertion could not tell which row
       # rendered it and the step's own arithmetic went unguarded.
-      ReactiveDag.Insights.forget_reports()
+      ReactiveDag.Insights.forget_runs()
       ReactiveDag.Insights.record(report_with_models())
 
       {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
@@ -720,7 +948,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
         ]
       }
 
-      ReactiveDag.Insights.forget_reports()
+      ReactiveDag.Insights.forget_runs()
       ReactiveDag.Insights.record(report)
 
       {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")

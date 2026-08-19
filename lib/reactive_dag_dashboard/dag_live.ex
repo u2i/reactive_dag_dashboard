@@ -285,29 +285,54 @@ defmodule ReactiveDagDashboard.DagLive do
     if parts == [], do: "", else: " · " <> Enum.join(parts, ", ")
   end
 
-  # One entry per DRAIN, newest first, with the roll-ups a log line wants.
+  # One entry per RUN, newest first, with the roll-ups a log line wants.
   #
-  # `Report.total/2` sums a key across steps and ignores steps that lack it, so
-  # a graph where only some ops report tokens still totals correctly rather than
-  # refusing to show a number.
-  defp runs do
-    for %{report: report, at: at} <- Insights.recent(@log_runs) do
+  # THE SINGLE ADAPTER. `Insights.recent/1` hands back `%ScanRun{}` entries and
+  # everything the log renders is shaped here, so the template reads plain maps
+  # and a library change lands in one function rather than throughout the
+  # markup.
+  #
+  # `ScanRun.total/2` sums a cost key across BOTH phases — the poll's own spend
+  # and every step's — because the bill for a scan is the pair, and reading only
+  # the drain's half understates a crawl that classifies with a model.
+  defp runs(plan) do
+    for %{run: run, at: at, polled?: polled?} <- Insights.recent(@log_runs) do
+      report = run.report
+
       %{
         at: at,
-        cells: length(Report.cells(report)),
-        passes: report.passes,
-        duration_us: report.duration_us,
-        changed: Report.changed_total(report),
-        tokens_in: Report.total(report, :tokens_in),
-        tokens_out: Report.total(report, :tokens_out),
+        # THE POLL. Zero/empty on a bare drain, where there was none — and
+        # `polled?` is what says which, rather than inferring it from a nil cell.
+        polled?: polled?,
+        scanned: run.cell,
+        # The WHOLE run: a scan's poll plus its drain. The drain's own share is
+        # below, and the gap between them is the poll — usually the larger
+        # number, and the reason a two-minute scan used to log as 6.1ms.
+        duration_us: run.duration_us,
+        drain_us: report && report.duration_us,
+        poll_changed: length(run.changed),
+        # A scan that could not LOOK must never read as a scan that found
+        # nothing. Carried whole, so the log can name the upstreams.
+        unreachable: run.unreachable,
+        complete?: ReactiveDag.ScanRun.complete?(run),
+        # THE DRAIN. Nil-safe throughout: a scan of an unscannable source
+        # completes without draining, and rendering "0 passes" for a drain that
+        # never happened would be reporting a fact about nothing.
+        drained?: ReactiveDag.ScanRun.drained?(run),
+        cells: (report && length(Report.cells(report))) || 0,
+        passes: (report && report.passes) || 0,
+        changed: (report && Report.changed_total(report)) || 0,
+        tokens_in: ReactiveDag.ScanRun.total(run, :tokens_in),
+        tokens_out: ReactiveDag.ScanRun.total(run, :tokens_out),
         # In AND out per model. The two directions are priced differently, but
         # one bar per model reads where two do not, and the question this
         # answers is "which model is driving spend" rather than "what was the
         # in/out split". That split stays on the step.
-        tokens_by: tokens_by(report),
-        llm_calls: Report.total(report, :llm_calls),
-        cache_hits: Report.total(report, :cache_hits),
-        steps: report.steps
+        tokens_by: tokens_by(run),
+        llm_calls: ReactiveDag.ScanRun.total(run, :llm_calls),
+        cache_hits: ReactiveDag.ScanRun.total(run, :cache_hits),
+        # The cascade, as a TREE rather than a flat list — see `run_tree/2`.
+        roots: run_tree(plan, report)
       }
     end
   end
@@ -316,15 +341,131 @@ defmodule ReactiveDagDashboard.DagLive do
   # is the total restated, and the total is already on the row. Deciding it here
   # rather than in the template because `:if` alongside `:for` is evaluated per
   # item and cannot say "unless the whole set is trivial".
-  defp tokens_by(report) do
+  #
+  # Across both phases, like the total it breaks down — a poll and a drain
+  # commonly use different models (a classifier and a summariser are chosen
+  # separately), which is exactly when the breakdown earns its place.
+  defp tokens_by(run) do
     by =
       Map.merge(
-        Report.by(report, :tokens_in),
-        Report.by(report, :tokens_out),
+        ReactiveDag.ScanRun.by(run, :tokens_in),
+        ReactiveDag.ScanRun.by(run, :tokens_out),
         fn _model, a, b -> a + b end
       )
 
     if map_size(by) > 1, do: by, else: %{}
+  end
+
+  # The run as a TREE, matching the downstream view's shape — because a run IS a
+  # change breaking things, and the flat list made you reconstruct the cascade
+  # from an "after X" suffix on every row.
+  #
+  # ## The tree is the report's own
+  #
+  # No graph walk is needed to build it: every step carries `triggered_by`, the
+  # cell whose propagation dirtied it, which is the same parent edge
+  # `Tree.downstream/2` follows. A step with `triggered_by: nil` was dirty when
+  # the drain started — a poll marked it, or a human did — so those are the
+  # roots, and a run may have several.
+  #
+  # ## How far down to draw: the run's own trace, plus ONE ring
+  #
+  # The point of the feature is the user's "except where there is no need to
+  # run", so the three states a cell can be in have to look different:
+  #
+  #   * recomputed and CHANGED — did work, and propagated
+  #   * recomputed and UNCHANGED — did work, and correctly stopped the cascade
+  #   * NEVER REACHED — an upstream stopped, so this never ran
+  #
+  # The first two are steps. The third is absence, and absence is what a flat
+  # list cannot say: a cell reporting 0 changed is *why* everything below it is
+  # missing, and without showing that the log reads as a truncated list rather
+  # than a completed cascade.
+  #
+  # Drawing the FULL downstream tree with un-run cells greyed would say it, and
+  # costs too much: a drain touching 3 cells in a 33-cell graph would render 30
+  # grey rows, burying the 3 that did work under the graph's static shape. The
+  # log is a record of what happened, not a picture of the plan.
+  #
+  # So: the steps, plus exactly one ring of un-run children — the cells a
+  # stopped cell would have dirtied had it changed. That is the boundary itself
+  # and nothing beyond it, which is the whole of the information "it stopped
+  # here" carries. What lies past the boundary did not not-run for its own
+  # reasons; it did not run because of the boundary, and the boundary is on
+  # screen. Anyone wanting the full downstream shape has the downstream view a
+  # tab away, which is the right place for a question about the graph rather
+  # than about this run.
+  defp run_tree(_plan, nil), do: []
+
+  defp run_tree(plan, %Report{steps: steps}) do
+    # A cell recomputed more than once (a diamond re-dirtied on a later pass)
+    # keeps its LAST step, matching `Report.causes/1` — the drain's own
+    # bookkeeping — so the tree has one node per cell rather than a repeat whose
+    # two occurrences disagree about what changed.
+    by_cell = Map.new(steps, &{&1.cell, &1})
+    ran = MapSet.new(steps, & &1.cell)
+
+    children =
+      steps
+      |> Enum.reject(&is_nil(&1.triggered_by))
+      |> Enum.group_by(& &1.triggered_by, & &1.cell)
+      |> Map.new(fn {parent, kids} -> {parent, kids |> Enum.uniq()} end)
+
+    steps
+    |> Enum.filter(&is_nil(&1.triggered_by))
+    |> Enum.map(& &1.cell)
+    |> Enum.uniq()
+    |> Enum.map(&step_node(plan, &1, by_cell, children, ran, MapSet.new()))
+  end
+
+  # One node per cell that ran, with its un-run ring appended.
+  #
+  # `seen` guards descent, not display: a malformed report naming a cycle of
+  # triggers must not hang the page, on the same reasoning `Tree` gives for
+  # refusing to descend into a cell already on the path.
+  defp step_node(plan, cell, by_cell, children, ran, seen) do
+    step = by_cell[cell]
+    changed = length(step.changed)
+
+    kids =
+      if MapSet.member?(seen, cell) do
+        []
+      else
+        seen = MapSet.put(seen, cell)
+
+        children
+        |> Map.get(cell, [])
+        |> Enum.map(&step_node(plan, &1, by_cell, children, ran, seen))
+      end
+
+    %{
+      id: cell,
+      cell: plan.cells[cell],
+      ran?: true,
+      changed: changed,
+      claimed: length(step.claimed),
+      op: step[:op],
+      duration_us: step.duration_us,
+      meta: step[:meta] || %{},
+      # The BOUNDARY. A cell that changed nothing stopped the cascade, and the
+      # cells it would have dirtied are the shape of that stop. Only drawn for a
+      # cell that actually stopped: a cell that changed something has its real
+      # children above, and listing its parents again as "not reached" would
+      # contradict them.
+      #
+      # Filtered against `ran` because a diamond's tip can be reached by the
+      # OTHER branch — `all_verdicts` still runs when `category_health` stops,
+      # because `spend_rollup` changed. Naming it "not reached" under the branch
+      # that stopped would be false, and it is drawn under the branch that did
+      # reach it.
+      not_reached:
+        if changed == 0 do
+          plan.parents |> Map.get(cell, []) |> Enum.reject(&MapSet.member?(ran, &1)) |> Enum.sort()
+        else
+          []
+        end,
+      kids: kids
+    }
   end
 
   # ── assembling what the page shows ──────────────────────────────────────────
@@ -344,7 +485,7 @@ defmodule ReactiveDagDashboard.DagLive do
     # and does not survive a restart — which is the right trade for "what just
     # happened" and the wrong one for an audit trail. A host wanting the latter
     # stores reports where its runs already live; the library says so.
-    |> assign(:runs, runs())
+    |> assign(:runs, runs(plan))
   end
 
   defp assign_view(%{assigns: %{root: nil}} = socket) do

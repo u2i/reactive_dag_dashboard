@@ -430,18 +430,44 @@ defmodule ReactiveDagDashboard.Components do
       }
       .rdd-run-calls { color: var(--faint) }
       .rdd-run-cached { color: var(--measured) }
+      /* the POLL's own half of a scan, ahead of the drain's counts */
+      .rdd-run-scan { color: var(--measured); margin-right: 8px }
+      /* the drain's share when it is only part of the run — parenthetical,
+         because the number that matters is the whole */
+      .rdd-run-drainms { color: var(--faint); font-variant-numeric: tabular-nums }
+      /* A gap, in the gap hue. A scan that could not look is not a scan that
+         found nothing, and this must not read as an ordinary count. */
+      .rdd-run-gap { color: var(--gap); font-weight: 700; cursor: help }
 
-      .rdd-run-steps { border-top: 1px solid var(--border); background: var(--bg) }
-      .rdd-step { display: flex; align-items: center; gap: 12px; padding: 6px 12px 6px 34px;
-                  font-family: ui-monospace, monospace; font-size: 11px;
-                  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent) }
-      .rdd-step:last-child { border-bottom: 0 }
+      .rdd-run-steps { border-top: 1px solid var(--border); background: var(--bg);
+                       padding: 4px 12px 6px }
+      .rdd-run-empty { color: var(--faint); font-size: 11.5px; margin: 6px 4px;
+                       font-family: ui-monospace, monospace }
+
+      /* The cascade as a tree. Same containment idiom as `.rdd-children` in the
+         expression view — the rail is what makes a deep branch scannable, and
+         it is the same rail, so the two surfaces read as one. */
+      .rdd-skids { margin-left: 10px; padding-left: 14px;
+                   border-left: 1px dashed #283341 }
+
+      .rdd-step { display: flex; align-items: center; gap: 12px; padding: 5px 8px;
+                  font-family: ui-monospace, monospace; font-size: 11px }
       .rdd-step-cell { color: #cdd6df; font-weight: 600; min-width: 15ch }
       .rdd-step-op { color: #9fb0c0; min-width: 9ch }
       .rdd-step-keys { color: var(--faint); font-variant-numeric: tabular-nums }
       .rdd-step-changed { color: var(--accent) }
-      .rdd-step-cause { color: var(--faint) }
       .rdd-step-cost { margin-left: auto; display: flex; gap: 10px }
+
+      /* ── the three states a cell can be in during a run ────────────────
+         The whole point of the tree. "Did work and propagated" is the accent
+         (it is the live path); "did work and stopped" is declared/amber (a
+         correct ending, not a failure); "never ran" is faint and italic — it is
+         an absence, and must not compete with the rows that did something. */
+      .rdd-step-stopped { color: var(--declared) }
+      .rdd-snode-stopped > .rdd-step > .rdd-step-cell { color: var(--declared) }
+      .rdd-step-unrun { opacity: .55 }
+      .rdd-step-unrun .rdd-step-cell { color: var(--faint); font-weight: 500 }
+      .rdd-step-unrun .rdd-step-keys { font-style: italic }
 
       /* ── the node panel ────────────────────────────────────────────── */
       .rdd-card { border: 1px solid var(--border); border-radius: 9px; background: var(--panel);
@@ -913,7 +939,8 @@ defmodule ReactiveDagDashboard.Components do
   attr(:runs, :list, required: true)
 
   @doc """
-  The drain log: one row per run, expandable to its per-cell steps.
+  The drain log: one row per run, expandable to the cascade it caused — drawn as
+  a TREE, in the shape of the downstream ("what a change breaks") view.
 
   A third view rather than something in a node's drawer, because a run is not a
   property of a node. "What did the 13:04 drain do" spans cells, and the drawer
@@ -925,11 +952,38 @@ defmodule ReactiveDagDashboard.Components do
   because it claimed 700 keys and did arithmetic on all of them. Only the pair
   distinguishes those.
 
+  ## Why a tree
+
+  A run IS a change breaking things, so it has the shape the downstream view
+  draws. The steps were a flat list with the causal edge demoted to a text
+  suffix — `after expenses` — which made the reader rebuild the cascade in their
+  head from a column of names, and made a fan-out of three indistinguishable
+  from a chain of three.
+
+  The tree is the report's own: every step carries `triggered_by`, which is the
+  same parent edge the downstream view walks. Nesting it is a re-shaping of data
+  already there, not a new query.
+
+  ## The three states
+
+  What a run cannot say as a flat list is where it STOPPED, so the states are
+  drawn apart:
+
+    * **changed** — did work and propagated; its children are below it
+    * **stopped here** — recomputed and changed nothing, which is the cascade
+      correctly ending rather than a cell that failed
+    * **not reached** — never ran, because the cell above it stopped
+
+  The third is the one a flat list renders as absence. A cell reporting 0
+  changed is *why* everything below it is missing, and un-run children are drawn
+  one ring deep to make that boundary visible — see `runs/1` for why one ring
+  rather than the whole downstream tree.
+
   ## Retention
 
   `Insights.recent/1` reads ETS, so this is per-node and empties on restart. That
   is the honest trade for "what just happened" and the wrong one for an audit
-  trail — the library is explicit that a host wanting durability records reports
+  trail — the library is explicit that a host wanting durability records runs
   where its runs already live.
   """
   def log(assigns) do
@@ -946,13 +1000,36 @@ defmodule ReactiveDagDashboard.Components do
           <span class="rdd-run-at"><%= at(run.at) %></span>
 
           <span class="rdd-run-sum">
+            <%!-- A scan names the cell it polled and what the POLL found, which
+                  is a different fact from what the drain then recomputed — and
+                  on a long crawl it is most of what happened. --%>
+            <span :if={run.polled?} class="rdd-run-scan">
+              scan <%= run.scanned %> · <%= run.poll_changed %> found
+            </span>
+
             <%= run.cells %> cell<%= plural(run.cells) %>
             · <%= run.passes %> pass<%= if run.passes == 1, do: "", else: "es" %>
             · <%= run.changed %> changed
           </span>
 
+          <%!-- A scan that could not LOOK must never read as a scan that found
+                nothing — the honest-gap discipline the library's own Source docs
+                insist on. Named, not counted alone: which upstream was down is
+                the actionable half. --%>
+          <span :if={not run.complete?} class="rdd-run-gap" title={unreachable_title(run.unreachable)}>
+            <%= length(run.unreachable) %> unreachable
+          </span>
+
           <span class="rdd-run-cost">
+            <%!-- The WHOLE run. On a scan that is the poll plus its drain, and
+                  the poll is usually the larger number — a two-minute crawl
+                  used to log as its drain's `6.1ms`, which read as a fast run
+                  rather than a slow one reported wrongly. The drain's own share
+                  sits beside it when the two differ. --%>
             <span class="rdd-run-ms"><%= ms(run.duration_us) %></span>
+            <span :if={run.drained? and run.drain_us && run.drain_us < run.duration_us} class="rdd-run-drainms">
+              (drain <%= ms(run.drain_us) %>)
+            </span>
             <span :if={run.tokens_in + run.tokens_out > 0} class="rdd-run-tok">
               <%= tok(run.tokens_in + run.tokens_out) %> tok
             </span>
@@ -976,35 +1053,92 @@ defmodule ReactiveDagDashboard.Components do
           </span>
         </div>
 
-        <%!-- The steps, in the order the drain took them — which is depth order,
-              so reading down the list is reading the cascade. --%>
+        <%!-- The cascade as a TREE, rooted at whatever was dirty when the drain
+              started. Nesting states the causal edge that `after X` used to
+              spell out per row, so a fan-out of three reads as a fan-out
+              rather than as three consecutive lines. --%>
         <div id={"run-#{i}"} class="rdd-run-steps hidden">
-          <div :for={step <- run.steps} class="rdd-step">
-            <span class="rdd-step-cell"><%= step.cell %></span>
-            <span class="rdd-step-op"><%= step.op %></span>
+          <%!-- A run with no steps is not an empty tree, it is a drain that
+                found nothing to do — which is a real outcome and reads as
+                broken when rendered as blank space. A scan that never drained
+                at all says that instead: no drain ran, so there is no cascade
+                to be missing. --%>
+          <p :if={run.roots == []} class="rdd-run-empty">
+            <%= if run.polled?  and not run.drained? do %>
+              The poll found nothing to recompute, so no drain ran.
+            <% else %>
+              Nothing was dirty — this drain recomputed no cells.
+            <% end %>
+          </p>
 
-            <span class="rdd-step-keys">
-              <%= length(step.claimed) %> claimed
-              <span :if={length(step.changed) > 0} class="rdd-step-changed">
-                · <%= length(step.changed) %> changed
-              </span>
-            </span>
-
-            <span :if={step.triggered_by} class="rdd-step-cause">
-              after <%= step.triggered_by %>
-            </span>
-
-            <span class="rdd-step-cost">
-              <span class="rdd-run-ms"><%= ms(step.duration_us) %></span>
-              <span :if={step_tokens(step) > 0} class="rdd-run-tok">
-                <%= tok(step_tokens(step)) %> tok
-              </span>
-            </span>
-          </div>
+          <.step_node :for={root <- run.roots} node={root} />
         </div>
       </div>
     </div>
     """
+  end
+
+  attr(:node, :map, required: true)
+
+  # One cell in a run's cascade, and its children — the same containment idiom
+  # as `tree_node/1`: the children live in a wrapper INSIDE the parent, carrying
+  # the indent and the rail, so a subtree is a bounded region rather than a run
+  # of rows that happen to start further right.
+  defp step_node(assigns) do
+    ~H"""
+    <div class={["rdd-snode", @node.changed == 0 && "rdd-snode-stopped"]}>
+      <div class="rdd-step">
+        <span class="rdd-step-cell"><%= @node.id %></span>
+        <span class="rdd-step-op"><%= @node.op %></span>
+
+        <span class="rdd-step-keys">
+          <%= @node.claimed %> claimed
+          <%!-- The two outcomes of having RUN, and the whole point of the tree.
+                A cell that changed something propagated, and its children are
+                below it. A cell that changed nothing did the work and correctly
+                ENDED the cascade — which the flat list rendered as the same
+                absence as a cell that never ran at all. --%>
+          <span :if={@node.changed > 0} class="rdd-step-changed">
+            · <%= @node.changed %> changed
+          </span>
+          <span :if={@node.changed == 0} class="rdd-step-stopped">
+            · nothing changed — stopped here
+          </span>
+        </span>
+
+        <span class="rdd-step-cost">
+          <span class="rdd-run-ms"><%= ms(@node.duration_us) %></span>
+          <span :if={step_tokens(@node) > 0} class="rdd-run-tok">
+            <%= tok(step_tokens(@node)) %> tok
+          </span>
+        </span>
+      </div>
+
+      <div :if={@node.kids != [] or @node.not_reached != []} class="rdd-skids">
+        <.step_node :for={kid <- @node.kids} node={kid} />
+
+        <%!-- The boundary made visible: what this cell WOULD have dirtied had
+              it changed. One ring deep, because the ring is the whole of the
+              information — everything past it did not run for this same reason,
+              and drawing the full downstream tree in grey would bury the cells
+              that did work under the graph's static shape. --%>
+        <div :for={id <- @node.not_reached} class="rdd-step rdd-step-unrun">
+          <span class="rdd-step-cell"><%= id %></span>
+          <span class="rdd-step-keys">not reached</span>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  # The unreachable upstreams, named with why — a tooltip rather than a row,
+  # because the count belongs in the summary line and the names belong to
+  # whoever is diagnosing it.
+  defp unreachable_title(unreachable) do
+    Enum.map_join(unreachable, ", ", fn
+      {id, reason} -> "#{id}: #{inspect(reason)}"
+      id -> to_string(id)
+    end)
   end
 
   defp plural(1), do: ""

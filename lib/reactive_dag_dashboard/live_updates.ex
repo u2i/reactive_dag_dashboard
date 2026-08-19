@@ -76,6 +76,9 @@ defmodule ReactiveDagDashboard.LiveUpdates do
     # touched so far. The tree renders a pulse from it, so the cascade is
     # visible AS it travels rather than only in the counts it leaves behind.
     |> Phoenix.Component.assign(:activity, %{})
+    # Ticks once per step, so "which cell was most recent" is a total order even
+    # when a whole cascade lands inside one millisecond. See `record_step/3`.
+    |> Phoenix.Component.assign(:step_seq, 0)
     |> Phoenix.Component.assign(:draining?, false)
     |> Phoenix.Component.assign(:progress_at, nil)
   end
@@ -87,14 +90,23 @@ defmodule ReactiveDagDashboard.LiveUpdates do
   cascade: a row that has an entry has run, and the newest entry is the wave
   front. Timestamps are monotonic ms, since the only question asked of them is
   "how long ago".
+
+  `at` alone cannot answer "which was newest", though: a drain recomputes many
+  cells inside one millisecond, so the steps of a fast cascade share a timestamp
+  and ordering by it is a tie the map resolves arbitrarily. `seq` is a strictly
+  increasing counter for exactly that — `at` is for elapsed time, `seq` is for
+  order.
   """
   @spec record_step(Phoenix.LiveView.Socket.t(), String.t(), non_neg_integer()) ::
           Phoenix.LiveView.Socket.t()
   def record_step(socket, cell_id, changed) do
-    entry = %{changed: changed, at: System.monotonic_time(:millisecond)}
+    seq = socket.assigns.step_seq
+
+    entry = %{changed: changed, at: System.monotonic_time(:millisecond), seq: seq}
 
     socket
     |> Phoenix.Component.assign(:activity, Map.put(socket.assigns.activity, cell_id, entry))
+    |> Phoenix.Component.assign(:step_seq, seq + 1)
     |> Phoenix.Component.assign(:draining?, true)
   end
 
@@ -186,7 +198,14 @@ defmodule ReactiveDagDashboard.LiveUpdates do
   @doc "Drop the trail. A no-op if another drain started in the meantime."
   @spec clear_trail(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   def clear_trail(%{assigns: %{draining?: true}} = socket), do: socket
-  def clear_trail(socket), do: Phoenix.Component.assign(socket, :activity, %{})
+  def clear_trail(socket) do
+    socket
+    |> Phoenix.Component.assign(:activity, %{})
+    # Reset with the map it indexes. Correctness does not depend on this — `seq`
+    # is only ever compared within one `activity` — but a counter that outlives
+    # every map it describes is a trap for the next reader.
+    |> Phoenix.Component.assign(:step_seq, 0)
+  end
 
   @doc "How long a row keeps its trail, in ms."
   @spec trail_ms() :: pos_integer()

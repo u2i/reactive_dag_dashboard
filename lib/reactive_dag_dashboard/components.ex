@@ -410,6 +410,18 @@ defmodule ReactiveDagDashboard.Components do
          expression tree's cards: these are records to compare down a column,
          not a structure to read. */
       .rdd-log { max-width: 1080px }
+      /* The in-flight drain. Bordered in the live accent and NOT clickable —
+         there is no report to expand yet, so it must not look like the finished
+         rows above it do. */
+      .rdd-run-live { border-color: color-mix(in srgb, var(--measured) 55%, var(--border)) }
+      .rdd-run-live .rdd-run-head { cursor: default }
+      .rdd-run-live .rdd-run-head:hover { background: transparent }
+      .rdd-live-dot { color: var(--measured); font-size: 9px; animation: rdd-pulse 1.4s ease-in-out infinite }
+      @keyframes rdd-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .25 } }
+      @media (prefers-reduced-motion: reduce) {
+        .rdd-live-dot { animation: none }
+      }
+
       .rdd-run { border: 1px solid var(--border); border-radius: 9px;
                  background: var(--panel); margin-bottom: 6px; overflow: hidden }
       .rdd-run-head { display: flex; align-items: center; gap: 12px;
@@ -990,10 +1002,33 @@ defmodule ReactiveDagDashboard.Components do
   trail — the library is explicit that a host wanting durability records runs
   where its runs already live.
   """
+  attr(:activity, :map, default: %{})
+  attr(:draining?, :boolean, default: false)
+
   def log(assigns) do
     ~H"""
     <div class="rdd-log">
-      <p :if={@runs == []} class="rdd-prompt">
+      <%!-- A run joins `@runs` when it FINISHES — the report is what gets
+            recorded, and there is no report until the drain is over. On a long
+            cascade that left this view empty and still for the whole run, under
+            a promise that runs "appear here as they happen".
+
+            So the in-flight drain gets a row of its own, built from the same
+            `:drain_step` stream the tree pulses from. It is deliberately not a
+            `.rdd-run`: there are no totals to show yet, and rendering a partial
+            count in the finished-run shape would invite reading it as one. It
+            disappears when `:drain_done` swaps in the real row. --%>
+      <div :if={@draining?} class="rdd-run rdd-run-live">
+        <div class="rdd-run-head">
+          <span class="rdd-live-dot">●</span>
+          <span class="rdd-run-at">running</span>
+          <span class="rdd-run-sum">
+            <%= map_size(@activity) %> cell<%= plural(map_size(@activity)) %> so far<%= live_tail(@activity) %>
+          </span>
+        </div>
+      </div>
+
+      <p :if={@runs == [] and not @draining?} class="rdd-prompt">
         No drains recorded yet. Runs appear here as they happen — a scan, a
         reprocess, or a write that dirtied something.
       </p>
@@ -1147,6 +1182,20 @@ defmodule ReactiveDagDashboard.Components do
 
   defp plural(1), do: ""
   defp plural(_), do: "s"
+
+  # The wave front. A bare cell COUNT climbing on its own says work is happening
+  # but not what; naming the latest cell is what makes a long cascade legible
+  # while it runs.
+  #
+  # By `seq`, NOT `at`: a drain recomputes many cells inside one millisecond, so
+  # ordering a fast cascade by its ms timestamps is a tie broken arbitrarily by
+  # map order — which named a cell at random on exactly the runs this row is for.
+  defp live_tail(activity) when map_size(activity) == 0, do: ""
+
+  defp live_tail(activity) do
+    {id, _} = Enum.max_by(activity, fn {_id, entry} -> entry[:seq] || 0 end)
+    " · " <> id
+  end
 
   # The library's fold, not our own: a step's cost here and the same step's cost
   # in a drain total are ONE fold rather than two that have to agree.

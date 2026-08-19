@@ -801,6 +801,154 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert nav =~ "graph"
     end
 
+    test "a drain that finishes while the log is open appears without a reload" do
+      # The whole point of the view: you open it, something runs, and you see
+      # it. Every other test in here loads the page AFTER the drain, which
+      # proves the rendering and says nothing about whether an open page
+      # notices. This one opens first and never reloads.
+      ReactiveDag.Insights.forget_runs()
+      Observer.attach(@pubsub)
+
+      {:ok, view, html} = live(build_conn(), "#{@path}?view=log")
+
+      # Count RUN ROWS, not cell names: "expenses" is in the cell picker on
+      # every render, so a substring check passes before anything has run.
+      runs = fn html ->
+        html |> String.split(~s(class="rdd-run-head")) |> length() |> Kernel.-(1)
+      end
+
+      assert runs.(html) == 0, "precondition: nothing has run yet"
+
+      edit_travel_to(1234.0)
+      Frontier.mark_dirty("expenses", ["*"], "edit")
+      {:ok, report} = drain()
+      ReactiveDag.Insights.record(report)
+
+      # `record/1` fills the ETS table; `:drain_done` is what tells the page to
+      # go and look. Ordering matters — the broadcast must land after the
+      # record, which is the order the real observer uses.
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:drain_done, report})
+
+      assert runs.(render(view)) == 1,
+             "an open log must show a run that finished while it was open"
+    end
+
+    test "a page with no pubsub still picks the run up on its refresh tick" do
+      # The fallback half. With no pubsub the page never hears `:drain_done`,
+      # so the ONLY thing that can surface a finished run is the poll timer.
+      # Sending `:refresh` by hand is what that timer does.
+      ReactiveDag.Insights.forget_runs()
+      Observer.detach()
+
+      {:ok, view, html} = live(build_conn(), "#{@path}?view=log")
+
+      runs = fn html ->
+        html |> String.split(~s(class="rdd-run-head")) |> length() |> Kernel.-(1)
+      end
+
+      assert runs.(html) == 0
+
+      edit_travel_to(99.0)
+      Frontier.mark_dirty("expenses", ["*"], "edit")
+      {:ok, report} = drain()
+      ReactiveDag.Insights.record(report)
+
+      send(view.pid, :refresh)
+
+      assert runs.(render(view)) == 1,
+             "the refresh tick must reload the log, not just the tree"
+    end
+
+    test "a drain IN FLIGHT shows a live row naming the wave front" do
+      # A run only joins `@runs` when it finishes, because the report is what
+      # gets recorded and there is no report until it is over. On a long cascade
+      # that left this view empty and motionless for the whole run — under an
+      # empty state promising runs "appear here as they happen".
+      ReactiveDag.Insights.forget_runs()
+      Observer.attach(@pubsub)
+
+      live_row = ~s(class="rdd-run rdd-run-live")
+
+      {:ok, view, html} = live(build_conn(), "#{@path}?view=log")
+      refute html =~ live_row, "nothing is running yet"
+      assert html =~ "No drains recorded yet"
+
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:drain_step, "expenses", ["*"]})
+      html = render(view)
+
+      assert html =~ live_row, "an in-flight drain must be visible while it runs"
+      assert html =~ "1 cell so far"
+
+      refute html =~ "No drains recorded yet",
+             "the empty state must yield to the run that is happening"
+
+      # The wave front moves: newest step wins, so the row names where the
+      # cascade has REACHED, not where it started.
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:drain_step, "category_health", ["a"]})
+      html = render(view)
+
+      assert html =~ "2 cells so far"
+
+      # Isolate the LIVE ROW: both cells are in `activity`, so a page-wide
+      # substring check for the newest name passes even when the row names the
+      # oldest. The claim is about which one this row picked.
+      [_, row] = String.split(html, live_row, parts: 2)
+      [row, _] = String.split(row, "</div>", parts: 2)
+
+      assert row =~ "category_health", "the row names the newest cell..."
+      refute row =~ "expenses", "...not the one the cascade started from"
+
+      # ...and it gives way to the real row once the run is over.
+      edit_travel_to(7.0)
+      Frontier.mark_dirty("expenses", ["*"], "edit")
+      {:ok, report} = drain()
+      ReactiveDag.Insights.record(report)
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:drain_done, report})
+
+      html = render(view)
+      refute html =~ live_row, "the live row is replaced by the finished one"
+      assert html =~ "rdd-run-head"
+    end
+
+    test "the wave front is ordered even when every step shares a millisecond" do
+      # The case `at` cannot answer. A real drain recomputes a whole cascade
+      # inside one millisecond, so these steps all carry the same `at` and only
+      # `seq` distinguishes them. Ordering by `at` here picks arbitrarily — and
+      # passed this test's earlier form by luck.
+      Observer.attach(@pubsub)
+      {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
+
+      # ORDER MATTERS. Broadcast so that the last step is NOT the one map
+      # iteration happens to yield first, or `max_by` under a full tie returns
+      # the right answer for the wrong reason and an `at`-ordered implementation
+      # passes. With this order `at` picks `budget_gap` and only `seq` picks
+      # `spend_rollup`.
+      ids = ~w(budget_gap category_health expenses spend_rollup)
+
+      for id <- ids do
+        Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:drain_step, id, ["*"]})
+      end
+
+      [_, row] = String.split(render(view), ~s(class="rdd-run rdd-run-live"), parts: 2)
+      [row, _] = String.split(row, "</div>", parts: 2)
+
+      assert row =~ "4 cells so far"
+
+      # Assert the tie is REAL first — if the steps landed in different
+      # milliseconds this proves nothing about ordering, and would quietly
+      # become a test of the clock.
+      %{activity: activity} = :sys.get_state(view.pid).socket.assigns
+      ats = activity |> Map.values() |> Enum.map(& &1.at) |> Enum.uniq()
+      assert length(ats) == 1, "precondition: all four steps share a millisecond"
+
+      # Name exactly the last one, and none of the others — `=~ "budget_gap"`
+      # alone passed under `at` ordering purely by map-iteration luck.
+      named = Enum.filter(ids, &String.contains?(row, &1))
+
+      assert named == ["spend_rollup"],
+             "the LAST step is the wave front, whatever the clock says"
+    end
+
     test "the log is reachable with no cell selected" do
       # A run is not a property of a node, so asking to see the log must not
       # require having first chosen one to look at.

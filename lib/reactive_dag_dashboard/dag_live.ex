@@ -691,7 +691,12 @@ defmodule ReactiveDagDashboard.DagLive do
         Pick <%= if @direction == :upstream, do: "an output", else: "a source" %> above.
       </p>
 
-      <.log :if={@view == :log} runs={@runs} />
+      <.log
+        :if={@view == :log}
+        runs={@runs}
+        activity={@activity}
+        draining?={@draining?}
+      />
 
       <%!-- An isolated cell is in both lists and has a tree in neither. --%>
       <div :if={@root && @dead_end? && @view != :log} class="rdd-empty">

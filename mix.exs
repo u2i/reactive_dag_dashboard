@@ -95,7 +95,7 @@ defmodule ReactiveDagDashboard.MixProject do
       #   rc.27 — `Source.progress/3`; against rc.26 the fixture scanner could
       #           not emit it, so the tests passed on hand-fired telemetry
       #           while the real path went untested.
-      {:reactive_dag, "~> 0.17.0-rc.43"},
+      {:reactive_dag, "~> 0.17.0-rc.45"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

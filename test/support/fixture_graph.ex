@@ -644,6 +644,109 @@ defmodule ReactiveDagDashboard.FixtureGraph do
   def compare_plan,
     do: ReactiveDag.Node.graph([Expenses, ExpenseProvenance, ExpenseTally, Watched])
 
+  # ── row_key: the three rungs, so the drawer's "which row" section has each ──
+  defmodule ByUuid do
+    use Ash.Resource,
+      domain: ReactiveDagDashboard.FixtureGraph.Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [ReactiveDag.Node]
+
+    ets do
+      private?(true)
+    end
+
+    attributes do
+      uuid_primary_key(:id, writable?: true)
+      attribute(:title, :string, public?: true)
+    end
+
+    actions do
+      defaults([:read, :destroy])
+
+      create :upsert do
+        upsert?(true)
+        accept([:id, :title])
+      end
+    end
+
+    reactive do
+      id(:by_uuid)
+      op(:source)
+      leaf?(true)
+      row_key(:uuid)
+    end
+  end
+
+  defmodule ByColumns do
+    use Ash.Resource,
+      domain: ReactiveDagDashboard.FixtureGraph.Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [ReactiveDag.Node]
+
+    ets do
+      private?(true)
+    end
+
+    attributes do
+      uuid_primary_key(:id)
+      attribute(:fund, :string, public?: true)
+      attribute(:fiscal_year, :string, public?: true)
+    end
+
+    actions do
+      defaults([:read, :destroy])
+
+      create :upsert do
+        upsert?(true)
+        accept([:fund, :fiscal_year])
+      end
+    end
+
+    reactive do
+      id(:by_columns)
+      op(:source)
+      leaf?(true)
+      row_key([:fund, :fiscal_year])
+    end
+  end
+
+  defmodule ByResolver do
+    use Ash.Resource,
+      domain: ReactiveDagDashboard.FixtureGraph.Domain,
+      data_layer: Ash.DataLayer.Ets,
+      extensions: [ReactiveDag.Node]
+
+    ets do
+      private?(true)
+    end
+
+    attributes do
+      uuid_primary_key(:id)
+      attribute(:board, :string, public?: true)
+    end
+
+    actions do
+      defaults([:read, :destroy, :update])
+
+      create :upsert do
+        accept([:board])
+      end
+    end
+
+    reactive do
+      id(:by_resolver)
+      op(:source)
+      leaf?(true)
+      row_key(&ReactiveDagDashboard.FixtureGraph.resolve_row/3)
+    end
+  end
+
+  @doc false
+  def resolve_row(_key, _attrs, _opts), do: nil
+
+  @doc "A plan whose nodes cover all three `row_key` rungs."
+  def row_key_plan, do: ReactiveDag.Node.graph([ByUuid, ByColumns, ByResolver])
+
   # recompute/2 returns {:ok, changed} or {:ok, changed, meta} depending on the
   # node shape; normalise so the seed does not care which.
   defp maybe_meta({:ok, changed}), do: {:ok, changed, %{}}

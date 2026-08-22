@@ -1349,6 +1349,23 @@ defmodule ReactiveDagDashboard.Components do
         <p class="rdd-lede" style="margin:0">no recorded recomputes</p>
       </div>
 
+      <%!-- WHICH ROW a key writes to. Paired with the section below because they
+            are the two halves of one write — this is which row, that is whether
+            it moved — and neither is inferable from the node's id. Rendered
+            unconditionally for the same reason: a node declaring nothing still
+            has an answer, and omitting it would read as "unknown". --%>
+      <div class="rdd-sec">
+        <div class="rdd-sec-head">which row</div>
+
+        <p class="rdd-lede" style="margin:0"><%= row_key_lede(@detail.row_key) %></p>
+
+        <div :if={row_key_columns(@detail.row_key)} class="rdd-row-acts" style="margin-top:7px">
+          <code :for={col <- row_key_columns(@detail.row_key)} class="rdd-mono">
+            <%= inspect(col) %>
+          </code>
+        </div>
+      </div>
+
       <%!-- The other half of the `changed` count above: that column says how
             many keys moved, and this says what moving MEANS here. Rendered
             unconditionally — a node that declares nothing has an answer too
@@ -1458,6 +1475,21 @@ defmodule ReactiveDagDashboard.Components do
   # declares nothing gets, it is usually right, and a reader who has just seen
   # an unexpected cascade needs to be told it rather than left to infer it from
   # a missing section.
+  # WHICH row a cell key writes to. `payload_key` is the default and still the
+  # common case, so it is phrased as the answer rather than as an absence.
+  defp row_key_lede(:uuid), do: "the key IS the row's id"
+
+  defp row_key_lede({:columns, _}),
+    do: "found by the columns that identify the row — the key is not stored"
+
+  defp row_key_lede(:resolver),
+    do: "a resolver decides, so sameness is a judgement this node makes itself"
+
+  defp row_key_lede({:payload_key, col}), do: "the key is written to #{inspect(col)}"
+
+  defp row_key_columns({:columns, cols}), do: cols
+  defp row_key_columns(_), do: nil
+
   defp compare_lede(%{basis: :compare, columns: cols}),
     do: "only #{count_cols(cols)} — the node declares which of its columns are its result"
 

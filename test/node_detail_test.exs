@@ -167,6 +167,29 @@ defmodule ReactiveDagDashboard.NodeDetailTest do
              "a re-parse shifts the ordinal without anything having changed"
     end
 
+    test "each `row_key` rung is reported, and the default is an ANSWER" do
+      # WHICH row a key writes to is not inferable from the node's id, and a
+      # reader asking why a node's rows look unfamiliar needs telling.
+      plan = FixtureGraph.row_key_plan()
+
+      assert NodeDetail.build(plan, "by_uuid").row_key == :uuid
+
+      assert NodeDetail.build(plan, "by_columns").row_key ==
+               {:columns, [:fund, :fiscal_year]}
+
+      assert NodeDetail.build(plan, "by_resolver").row_key == :resolver,
+             "a resolver is opaque by construction — no columns to name"
+    end
+
+    test "a node declaring no `row_key` names the column the key is written to" do
+      # The default, phrased as the answer rather than an absence — same
+      # reasoning as `compare`'s `:every_column`.
+      detail = NodeDetail.build(plan(), "category_health")
+
+      assert {:payload_key, col} = detail.row_key
+      assert is_atom(col)
+    end
+
     test "a node declaring none says every column, which is an ANSWER not an absence" do
       # the reader asking why a cascade fired needs to be TOLD this, not left to
       # infer it from a missing section

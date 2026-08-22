@@ -45,6 +45,11 @@ defmodule ReactiveDagDashboard.DagLive do
     {:ok,
      socket
      |> assign(:plan_mfa, session["plan_mfa"])
+     # Resolved ONCE at mount: the list is a host lookup (a table read), and a
+     # switch that re-queried on every render would do it on every keystroke of
+     # every other control.
+     |> assign(:tenants, tenants(session["tenants_mfa"]))
+     |> assign(:tenant, nil)
      |> assign(:base_path, "/")
      |> assign(:root, nil)
      |> assign(:direction, :downstream)
@@ -62,6 +67,9 @@ defmodule ReactiveDagDashboard.DagLive do
      |> assign(:base_path, base_path(uri, params["cell_id"]))
      |> assign(:direction, dir)
      |> assign(:view, view(params))
+     # In the URL like `direction`, so a link to a cell is a link to THAT
+     # tenant's cell — and a copied URL shows the same graph to whoever opens it.
+     |> put_tenant(tenant(params, socket.assigns.tenants))
      # NOT defaulted. With no cell named the page shows the starting points for
      # this direction and waits — picking one is the first act, rather than the
      # page guessing a root and rendering a tree nobody asked for.
@@ -90,6 +98,20 @@ defmodule ReactiveDagDashboard.DagLive do
   # nobody asked: you picked `expenses` to see what it reaches, hit upstream,
   # and got "nothing feeds this". Direction is chosen first and the list of
   # starting points follows from it.
+  # Switching tenant CLEARS the cell. Cell ids repeat across tenants, so the same
+  # id usually exists in both — and carrying it over would silently show a
+  # different tenant's data under a name the reader already had on screen, which
+  # is worse than starting from the picker. Direction survives: it is a question,
+  # not a place.
+  def handle_event("tenant", %{"to" => to}, socket) do
+    root = String.replace_suffix(socket.assigns.base_path, "/", "")
+
+    {:noreply,
+     push_patch(socket,
+       to: "#{root}?direction=#{socket.assigns.direction}&tenant=#{to}"
+     )}
+  end
+
   def handle_event("direction", %{"to" => to}, socket) do
     # `base_path` keeps its trailing slash so `<base>cell/<id>` composes; strip
     # it here, since `/ops/dag/?direction=…` is an odd URL to put in a bar.
@@ -475,6 +497,11 @@ defmodule ReactiveDagDashboard.DagLive do
 
   defp load(socket) do
     {mod, fun, args} = socket.assigns.plan_mfa
+
+    # The chosen tenant is APPENDED to the declared args, so a host writes
+    # `plan: {MyApp.Dag, :plan, []}` once and gets `plan/0` untenanted or
+    # `plan/1` per tenant from the same declaration.
+    args = if t = socket.assigns[:tenant], do: args ++ [t], else: args
     plan = apply(mod, fun, args)
     controls = ReactiveDag.Source.controls(plan)
 
@@ -557,6 +584,48 @@ defmodule ReactiveDagDashboard.DagLive do
   defp direction(%{"direction" => "upstream"}), do: :upstream
   defp direction(_), do: :downstream
 
+  # Assign the tenant, and RELOAD when it changed.
+  #
+  # `mount/3` loads before `handle_params/3` runs, so the plan it built is the
+  # default tenant's. Without the reload the switch would highlight the new
+  # tenant while every panel below still showed the old one's graph — the two
+  # disagreeing silently, which is why the nav renders the LOADED plan's tenant
+  # rather than the assign.
+  defp put_tenant(socket, tenant) do
+    if socket.assigns[:tenant] == tenant do
+      socket
+    else
+      socket |> Phoenix.Component.assign(:tenant, tenant) |> load()
+    end
+  end
+
+  # The host's tenant list, normalised to `{id, label}`. `nil` when the host
+  # named none — one graph, and the switch is not rendered at all.
+  defp tenants(nil), do: []
+
+  defp tenants({m, f, a}) do
+    apply(m, f, a)
+    |> Enum.map(fn
+      {id, label} -> {to_string(id), to_string(label)}
+      id -> {to_string(id), to_string(id)}
+    end)
+  end
+
+  # The tenant from the URL, but only if the host actually declares it. An
+  # unknown id falls back to the first rather than being passed through: it would
+  # otherwise reach the host's plan builder, which has no reason to expect it —
+  # and a typo'd URL should show a graph, not raise.
+  defp tenant(_params, []), do: nil
+
+  defp tenant(%{"tenant" => id}, tenants) do
+    if Enum.any?(tenants, fn {t, _} -> t == id end), do: id, else: default_tenant(tenants)
+  end
+
+  defp tenant(_params, tenants), do: default_tenant(tenants)
+
+  defp default_tenant([{id, _} | _]), do: id
+  defp default_tenant(_), do: nil
+
   # The tree answers "what does a change here reach" and repeats a cell per
   # route; the graph answers "what is the shape of the whole thing" and draws
   # convergence once. Two questions, two renderings of one expression.
@@ -571,17 +640,26 @@ defmodule ReactiveDagDashboard.DagLive do
     dir = Keyword.get(overrides, :direction, to_string(assigns.direction))
     view = Keyword.get(overrides, :view, to_string(assigns.view))
 
+    tenant = Keyword.get(overrides, :tenant, assigns[:tenant])
+
     query =
-      [{"direction", dir}, {"view", view}]
+      [{"direction", dir}, {"view", view}, {"tenant", tenant}]
       |> Enum.reject(fn {k, v} ->
-        (k == "direction" and v == "downstream") or (k == "view" and v == "tree")
+        is_nil(v) or (k == "direction" and v == "downstream") or
+          (k == "view" and v == "tree")
       end)
       |> case do
         [] -> ""
         pairs -> "?" <> URI.encode_query(pairs)
       end
 
-    "#{assigns.base_path}cell/#{cell}#{query}"
+    # NO cell segment when nothing is selected. `cell/` with an empty id is not a
+    # route, so `push_patch` raised — which is how the `runs` button broke when
+    # clicked before picking a cell, the one view that is deliberately reachable
+    # without one.
+    segment = if cell in [nil, ""], do: "", else: "cell/#{cell}"
+
+    "#{assigns.base_path}#{segment}#{query}"
   end
 
   # The host picks the mount prefix, so links derive from the request URI.
@@ -626,6 +704,27 @@ defmodule ReactiveDagDashboard.DagLive do
           runs
         </button>
       </header>
+
+      <%!-- TENANT FIRST, above everything. The page below is a funnel — which
+            question, which cell, which view — and a tenant is not a narrowing of
+            any of that: it chooses WHICH GRAPH the funnel is about. Rendering it
+            inside the funnel would read as a fourth filter on one graph, which
+            is exactly what it is not. --%>
+      <%!-- `data-tenant` is the LOADED plan's tenant, not the button state. They
+            can disagree — a switch that highlights `village` while `load/1`
+            still holds the borough's plan is the failure worth catching, and it
+            is invisible if the page only ever renders what was clicked. --%>
+      <nav :if={@tenants != []} class="rdd-tenants" data-tenant={@plan.tenant}>
+        <span class="rdd-tenants-label">graph</span>
+        <button
+          :for={{id, label} <- @tenants}
+          class={["rdd-tenant", @tenant == id && "on"]}
+          phx-click="tenant"
+          phx-value-to={id}
+        >
+          <%= label %>
+        </button>
+      </nav>
 
       <div :if={@message} class="rdd-alert"><%= @message %></div>
 

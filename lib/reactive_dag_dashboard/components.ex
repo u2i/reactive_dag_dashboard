@@ -146,6 +146,27 @@ defmodule ReactiveDagDashboard.Components do
          Direction is chosen FIRST and as a question in words, because that is
          what someone arrives with. "downstream" is the graph's word for it,
          not theirs. */
+      /* TENANT — above the funnel, and visually a different kind of control from
+         everything below it. The rows beneath are a narrowing sequence (question
+         → cell → view); this chooses which GRAPH that sequence is about, so it
+         reads as a segmented switch rather than another row of cards. Separated
+         by a rule instead of only spacing, because "different kind" is the whole
+         claim it makes. */
+      .rdd-tenants { display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+                     margin-bottom: 16px; padding-bottom: 14px;
+                     border-bottom: 1px solid var(--border) }
+      .rdd-tenants-label { font-size: 10px; text-transform: uppercase;
+                           letter-spacing: .08em; color: var(--faint);
+                           margin-right: 4px }
+      .rdd-tenant { font: inherit; font-size: 12.5px; font-weight: 600;
+                    font-family: ui-monospace, monospace;
+                    background: transparent; color: var(--dim);
+                    border: 1px solid var(--border); border-radius: 7px;
+                    padding: 5px 12px; cursor: pointer }
+      .rdd-tenant:hover { border-color: #3a4655; color: var(--ink) }
+      .rdd-tenant.on { border-color: var(--accent); background: var(--panel2);
+                       color: var(--accent) }
+
       .rdd-ask { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap }
       .rdd-askbtn { display: flex; flex-direction: column; gap: 2px; text-align: left;
                     font: inherit; background: var(--panel); color: var(--dim);

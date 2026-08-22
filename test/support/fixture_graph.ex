@@ -605,21 +605,32 @@ defmodule ReactiveDagDashboard.FixtureGraph do
   end
 
   @doc "The plan, as the router's `:plan` MFA would return it."
-  def plan,
-    do:
-      ReactiveDag.Node.graph([
-        Expenses,
-        CategoryHealth,
-        SpendRollup,
-        AllVerdicts,
-        ExpenseNotes,
-        CouncilPortal,
-        Minutes,
-        Resolutions,
-        Unscanned,
-        VerdictAudit,
-        Published
-      ])
+  def plan, do: ReactiveDag.Node.graph(resources())
+
+  @doc """
+  One TENANT'S plan — the shape a host supplies when the dashboard names
+  `tenants:`. The dashboard appends the chosen tenant to the declared args, so
+  the same `{FixtureGraph, :plan, []}` reaches `plan/0` or `plan/1`.
+  """
+  def plan(tenant), do: ReactiveDag.Node.graph(resources(), tenant: tenant)
+
+  @doc "The tenants, as a host's `:tenants` MFA would return them."
+  def tenants, do: [{"borough", "Borough of Test"}, {"village", "Village of Test"}]
+
+  defp resources,
+    do: [
+      Expenses,
+      CategoryHealth,
+      SpendRollup,
+      AllVerdicts,
+      ExpenseNotes,
+      CouncilPortal,
+      Minutes,
+      Resolutions,
+      Unscanned,
+      VerdictAudit,
+      Published
+    ]
 
   @doc """
   A SEPARATE plan for the change-basis tests — `expenses` plus the nodes that

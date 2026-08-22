@@ -15,6 +15,13 @@ defmodule ReactiveDagDashboard.Router do
         reactive_dag_dashboard "/reactive-dag",
           plan: {MyApp.Dag, :plan, []}
       end
+
+  For a host running the same graph for several tenants, name the tenant list too
+  — the dashboard renders a switch and asks `:plan` for one tenant at a time:
+
+      reactive_dag_dashboard "/reactive-dag",
+        plan: {MyApp.Dag, :plan, []},
+        tenants: {MyApp.Municipalities, :for_dashboard, []}
   """
 
   @doc """
@@ -27,6 +34,17 @@ defmodule ReactiveDagDashboard.Router do
       An MFA rather than a plan value because a plan is built at runtime from
       resource modules, and rebuilding it per request keeps the page honest when
       the graph changes.
+    * `:tenants` — an MFA returning this host's tenants, when the same topology
+      runs for several of them (`ReactiveDag.Node.graph(resources, tenant: t)`).
+      Each entry is `{id, label}` or a bare id. The dashboard renders a switch
+      above everything else and calls `:plan`'s function with the chosen id
+      APPENDED to its args, so `plan: {MyApp.Dag, :plan, []}` becomes
+      `MyApp.Dag.plan("tenant_a")`.
+
+      An MFA, like `:plan`, because a tenant list is data that changes without a
+      deploy — a literal would freeze at compile time and go stale the first time
+      one is added. Omit it for a host running one graph and the page is exactly
+      as it was.
     * `:as` — the route name (default `:reactive_dag_dashboard`).
     * `:live_session_name` — default `:reactive_dag_dashboard`.
     * `:on_mount` — extra `on_mount` hooks for the live session, so a host can
@@ -59,6 +77,7 @@ defmodule ReactiveDagDashboard.Router do
   defmacro reactive_dag_dashboard(path, opts \\ []) do
     quote bind_quoted: binding() do
       plan_mfa = Keyword.fetch!(opts, :plan)
+      tenants_mfa = Keyword.get(opts, :tenants)
       session_name = Keyword.get(opts, :live_session_name, :reactive_dag_dashboard)
       route_name = Keyword.get(opts, :as, :reactive_dag_dashboard)
       extra_on_mount = List.wrap(Keyword.get(opts, :on_mount, []))
@@ -71,7 +90,7 @@ defmodule ReactiveDagDashboard.Router do
       scope path, alias: false, as: false do
         live_session session_name,
           root_layout: layout,
-          session: %{"plan_mfa" => plan_mfa},
+          session: %{"plan_mfa" => plan_mfa, "tenants_mfa" => tenants_mfa},
           on_mount: extra_on_mount do
           # ONE view. It used to be three — an index by depth plus the two
           # directional trees — each answering a slice of the same question and

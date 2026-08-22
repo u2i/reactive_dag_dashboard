@@ -82,11 +82,41 @@ defmodule ReactiveDagDashboard.NodeDetail do
           slices: ReactiveDag.Node.Rows.slices(cell),
           # ...and the unit that DOES invalidate: what counts as a change
           compare: compare(cell),
+          # WHICH ROW a key writes to. Invisible otherwise, and the answer a
+          # reader needs when a node's rows are not keyed the way its id suggests.
+          row_key: row_key(cell),
           steps: steps,
           last_run: steps |> List.first() |> then(&(&1 && &1.at))
         }
     end
   end
+
+  @doc """
+  How a cell key maps to a ROW — the node's `row_key`, or the derived default.
+
+  A cell key names a unit of work; which row that unit writes is a separate
+  question, and one a reader cannot answer from the id. Four answers:
+
+    * `:uuid` — the key IS the row's id
+    * `{:columns, [..]}` — the row is found by those columns' values
+    * `:resolver` — a function decides; opaque by construction, so no columns
+    * `{:payload_key, :col}` — the default: the key is written to that column
+
+  Named separately from `compare/1` because they answer different halves of one
+  write: `row_key` is WHICH row, `compare` is whether it MOVED.
+  """
+  @spec row_key(ReactiveDag.Cell.t() | map()) ::
+          :uuid | :resolver | {:columns, [atom()]} | {:payload_key, atom()}
+  def row_key(%{meta: meta}) do
+    case meta[:row_key] do
+      :uuid -> :uuid
+      fields when is_list(fields) and fields != [] -> {:columns, fields}
+      fun when is_function(fun) -> :resolver
+      _ -> {:payload_key, meta[:payload_key] || :key}
+    end
+  end
+
+  def row_key(_cell), do: {:payload_key, :key}
 
   @doc """
   What makes a key count as CHANGED — the other half of a step's `changed` count.

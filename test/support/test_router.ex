@@ -29,6 +29,14 @@ defmodule ReactiveDagDashboard.TestRouter do
       live_session_name: :host_chrome,
       root_layout: {ReactiveDagDashboard.HostLayout, :root}
     )
+
+    # a MULTI-TENANT mount: the same topology, several graphs
+    reactive_dag_dashboard("/multi/dag",
+      plan: {ReactiveDagDashboard.FixtureGraph, :plan, []},
+      tenants: {ReactiveDagDashboard.FixtureGraph, :tenants, []},
+      as: :multi,
+      live_session_name: :multi
+    )
   end
 end
 

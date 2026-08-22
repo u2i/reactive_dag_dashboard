@@ -78,6 +78,10 @@ defmodule ReactiveDagDashboard.MixProject do
       # explanation for a `changed` count, so a reader would be told the cascade
       # fired on columns it does not actually watch.
       #
+      # rc.42 for `%Plan{tenant:}` — the tenant switch reads it off the plan
+      # rather than keeping its own copy, so the switch and the graph on screen
+      # cannot disagree. An older library has no such field.
+      #
       # rc.35 for `[:reactive_dag, :drain, :cell_failed]` — a cell that failed
       # WITHOUT failing the drain. An older library never emits it, so a
       # contained failure would show as a clean drain over a stale cell.
@@ -91,7 +95,7 @@ defmodule ReactiveDagDashboard.MixProject do
       #   rc.27 — `Source.progress/3`; against rc.26 the fixture scanner could
       #           not emit it, so the tests passed on hand-fired telemetry
       #           while the real path went untested.
-      {:reactive_dag, "~> 0.17.0-rc.40"},
+      {:reactive_dag, "~> 0.17.0-rc.42"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

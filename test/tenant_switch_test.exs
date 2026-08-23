@@ -225,4 +225,52 @@ defmodule ReactiveDagDashboard.TenantSwitchTest do
       assert a.depths == b.depths
     end
   end
+
+  describe "the runs log is this graph's" do
+    # `ReactiveDag.Insights` keeps ONE process-wide window of runs. Every tenant's
+    # drain lands in it, so an unfiltered read showed a scan of the Borough's
+    # graph in the log the page was rendering for the Village — and the log's own
+    # cap counted across all of them, so a busy neighbour truncated this tenant's
+    # log to whatever was left.
+    setup do
+      ReactiveDag.Insights.forget_runs()
+
+      for {tenant, passes} <- [{"borough", 11}, {"village", 22}] do
+        ReactiveDag.Insights.record(
+          %ReactiveDag.Drain.Report{passes: passes, duration_us: passes, steps: []},
+          tenant: tenant
+        )
+      end
+
+      :ok
+    end
+
+    test "shows only the selected tenant's runs" do
+      {:ok, _view, html} = live(build_conn(), "#{@multi}?tenant=village&view=log")
+
+      assert html =~ "22 passes", "the village's own run"
+
+      refute html =~ "11 passes",
+             "the borough's run must not appear in the village's log — one buffer " <>
+               "holds both, and a log line says nothing about which graph it was"
+    end
+
+    test "and the other tenant sees the other run" do
+      {:ok, _view, html} = live(build_conn(), "#{@multi}?tenant=borough&view=log")
+
+      assert html =~ "11 passes"
+      refute html =~ "22 passes"
+    end
+
+    test "an untenanted mount still sees everything" do
+      # A host with one graph records no tenant and reads unfiltered, so nothing
+      # about this changes for it. Recorded WITH tenants here on purpose: the
+      # single-graph page must not start hiding runs just because the buffer
+      # happens to hold labelled ones.
+      {:ok, _view, html} = live(build_conn(), "#{@single}?view=log")
+
+      assert html =~ "11 passes"
+      assert html =~ "22 passes"
+    end
+  end
 end

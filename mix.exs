@@ -82,6 +82,17 @@ defmodule ReactiveDagDashboard.MixProject do
       # rather than keeping its own copy, so the switch and the graph on screen
       # cannot disagree. An older library has no such field.
       #
+      # rc.51 for `Insights.recent/2`'s `tenant:` — the runs log shows THIS
+      # graph's runs. Against an older library the option is unknown, so the log
+      # would mix every tenant's runs into whichever graph is on screen and count
+      # `@log_runs` across all of them.
+      #
+      # rc.56 for a PHASE — `Source.progress/3` with `done`/`total` nil and the
+      # label alone. A crawl's counter stops at `n/n` when FETCHING ends and the
+      # writes that follow are the slowest part, so without this the page holds a
+      # frozen number through them and a working poll reads as hung. Against an
+      # older library the spec forbids the nil, so a scanner cannot report one.
+      #
       # rc.35 for `[:reactive_dag, :drain, :cell_failed]` — a cell that failed
       # WITHOUT failing the drain. An older library never emits it, so a
       # contained failure would show as a clean drain over a stale cell.
@@ -95,7 +106,7 @@ defmodule ReactiveDagDashboard.MixProject do
       #   rc.27 — `Source.progress/3`; against rc.26 the fixture scanner could
       #           not emit it, so the tests passed on hand-fired telemetry
       #           while the real path went untested.
-      {:reactive_dag, "~> 0.17.0-rc.45"},
+      {:reactive_dag, "~> 0.17.0-rc.56"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

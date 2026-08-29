@@ -230,11 +230,11 @@ defmodule ReactiveDagDashboard.DagLive do
   # A scanner emits per unit of work, so this arrives hundreds of times in one
   # crawl. `record_scan/3` throttles it — see there for why dropping an
   # intermediate count is free and dropping an OUTCOME is not.
-  def handle_info({:scan_progress, cell_id, done, total}, socket) do
+  def handle_info({:scan_progress, cell_id, done, total, label}, socket) do
     {:noreply,
      socket
      |> LiveUpdates.seen_event()
-     |> LiveUpdates.record_scan(cell_id, {:progress, done, total})}
+     |> LiveUpdates.record_scan(cell_id, {:progress, done, total, label})}
   end
 
   def handle_info({:scan_done, cell_id, result}, socket) do
@@ -318,7 +318,15 @@ defmodule ReactiveDagDashboard.DagLive do
   # and every step's — because the bill for a scan is the pair, and reading only
   # the drain's half understates a crawl that classifies with a model.
   defp runs(plan) do
-    for %{run: run, at: at, polled?: polled?} <- Insights.recent(@log_runs) do
+    # THIS GRAPH's runs. The buffer is process-wide and holds every tenant's, so
+    # an unfiltered read put a scan of the Town's graph in the log the page was
+    # showing for the Village — and `@log_runs` counted across all of them, so a
+    # busy neighbour truncated this tenant's log to a handful of lines.
+    #
+    # `plan.tenant` is `"*"` for a host with one graph, which `recent/2`
+    # normalises to "unfiltered" — so nothing changes for the single-graph case.
+    for %{run: run, at: at, polled?: polled?} <-
+          Insights.recent(@log_runs, tenant: plan.tenant) do
       report = run.report
 
       %{

@@ -28,10 +28,18 @@ defmodule ReactiveDagDashboard.FakeRepo do
   # Rows are `{tenant, cell, key}` — the library's frontier is keyed by
   # (tenant, cell_id, key), and a fake that dropped the tenant would let a
   # tenant-scoping bug pass every test here.
+  # SEVEN columns: `(cell_id, tenant, key, reason, enqueued_at, awaiting_approval,
+  # version_id)`. The mark carries a REFERENCE to the change (`version_id`) rather
+  # than an inlined diff, and `awaiting_approval` gates a change waiting on a person.
+  #
+  # This fake had six and was three releases behind, so every drain here failed on a
+  # clause miss the moment the library moved. It is a copy of the wire format, which
+  # is what makes it drift — the library keeps its own shared fake, but in
+  # `test/support`, which Hex does not ship.
   def query!("INSERT INTO " <> _, params) do
     params
-    |> Enum.chunk_every(6)
-    |> Enum.each(fn [cell, tenant, key, _r, _t, _prior] ->
+    |> Enum.chunk_every(7)
+    |> Enum.each(fn [cell, tenant, key, _reason, _at, _held, _version_id] ->
       Agent.update(__MODULE__, &MapSet.put(&1, {tenant, cell, key}))
     end)
 

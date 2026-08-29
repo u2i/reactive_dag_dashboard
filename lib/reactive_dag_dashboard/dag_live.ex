@@ -178,6 +178,25 @@ defmodule ReactiveDagDashboard.DagLive do
   # `changed` was discarded here. It is the number the trail shows — "ran, 12
   # changed" is the difference between a cell that did work and one the drain
   # merely visited and found settled.
+  # A cell BEGAN. Recorded as activity so the row says what is running now, rather
+  # than holding the last thing that finished — which after a poll is that poll's
+  # final phase, and is why a working drain read as a stall.
+  def handle_info({:cell_running, cell_id, claimed}, socket) do
+    {:noreply,
+     socket
+     |> LiveUpdates.seen_event()
+     |> LiveUpdates.record_running(cell_id, claimed)}
+  end
+
+  # How far through a recompute is. Throttled like scan progress — an op emits per
+  # unit, and dropping an intermediate count is free because the next supersedes it.
+  def handle_info({:cell_progress, cell_id, done, total, label}, socket) do
+    {:noreply,
+     socket
+     |> LiveUpdates.seen_event()
+     |> LiveUpdates.record_cell_progress(cell_id, {done, total, label})}
+  end
+
   def handle_info({:drain_step, cell_id, changed}, socket) do
     {:noreply,
      socket

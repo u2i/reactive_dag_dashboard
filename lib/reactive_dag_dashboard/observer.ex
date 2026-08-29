@@ -18,6 +18,8 @@ defmodule ReactiveDagDashboard.Observer do
 
   ## What is broadcast
 
+      {:cell_running, cell_id, claimed}      a cell BEGAN recomputing
+      {:cell_progress, cell_id, done, total, label} a recompute advanced
       {:drain_step, cell_id, changed_keys}   after each cell recomputes
       {:drain_done, report}                  when the drain finishes
       {:drain_failed, reason}                when it raised
@@ -54,6 +56,16 @@ defmodule ReactiveDagDashboard.Observer do
 
   @events [
     [:reactive_dag, :drain, :step],
+    # BEFORE a cell recomputes. `:step` fires when it FINISHES, so the slowest cell
+    # in a graph — an LLM extraction running for minutes — is invisible for exactly
+    # as long as it is the one working. The page then holds whatever it last heard,
+    # which after a poll is that poll's final phase, and a working drain reads as a
+    # hang.
+    [:reactive_dag, :drain, :cell_start],
+    # From inside ONE recompute. `:cell_start` names the slow cell; this says how far
+    # through it is — "meeting_events · 12/34 meetings" rather than four minutes of
+    # "recomputing".
+    [:reactive_dag, :drain, :progress],
     [:reactive_dag, :drain, :stop],
     [:reactive_dag, :drain, :exception],
     [:reactive_dag, :drain, :cell_failed],
@@ -156,6 +168,22 @@ defmodule ReactiveDagDashboard.Observer do
   # batching would push an arbitrary N into every scanner. Coalescing is THIS
   # side's job: the LiveView already flushes on a 150ms timer, so those 700
   # become a handful of renders.
+  # A cell BEGAN. The counterpart to `:drain, :step`, and the event that lets a page
+  # name the cell that is running rather than the last one that finished.
+  def handle([:reactive_dag, :drain, :cell_start], measurements, metadata, %{pubsub: pubsub}) do
+    broadcast(pubsub, {:cell_running, metadata[:cell], measurements[:claimed]})
+  end
+
+  # An op emits this per unit of work, so it arrives many times in one recompute.
+  # Coalescing is THIS side's job, same as `:scan, :progress`.
+  def handle([:reactive_dag, :drain, :progress], measurements, metadata, %{pubsub: pubsub}) do
+    broadcast(
+      pubsub,
+      {:cell_progress, metadata[:cell], measurements.done, measurements[:total],
+       metadata[:label]}
+    )
+  end
+
   def handle([:reactive_dag, :scan, :progress], measurements, metadata, %{pubsub: pubsub}) do
     broadcast(
       pubsub,

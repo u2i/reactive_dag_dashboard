@@ -909,6 +909,30 @@ defmodule ReactiveDagDashboard.Components do
 
   defp activity_label(%{changed: n}), do: "ran · #{n} changed"
 
+  # RUNNING NOW. Before the scan clauses, so a cell that began recomputing stops
+  # showing whatever its poll last said — which is the stale label a host reported
+  # as "stuck on reconciling".
+  # A ratio from inside the recompute — "recomputing · 12/34 meetings". This is the
+  # one that answers "is it working or wedged" for a cell that runs for minutes.
+  defp activity_label(%{running: {done, total, label}})
+       when is_integer(done) and is_integer(total) and total > 0,
+       do: "recomputing · #{done}/#{total}#{unit(label)}"
+
+  defp activity_label(%{running: {done, _total, label}}) when is_integer(done),
+    do: "recomputing · #{done}#{unit(label)}"
+
+  # A phase inside a recompute: the label alone.
+  defp activity_label(%{running: {nil, nil, phase}}) when is_binary(phase),
+    do: "recomputing · #{phase}"
+
+  # `:cell_start` — a cell BEGAN, with the keys it claimed but nothing from inside
+  # yet. An op that never calls `Op.progress/3` stays here for its whole run, which
+  # still names the cell that is working.
+  defp activity_label(%{running: n}) when is_integer(n) and n > 0,
+    do: "recomputing · #{n} #{plural(n, "key", "keys")}"
+
+  defp activity_label(%{running: _}), do: "recomputing…"
+
   defp activity_label(%{scan: :running}), do: "polling…"
 
   # A PHASE with no count — "polling · writing rows". A crawl reports several
@@ -960,6 +984,9 @@ defmodule ReactiveDagDashboard.Components do
   end
 
   defp activity_label(_), do: nil
+
+  defp plural(1, singular, _plural), do: singular
+  defp plural(_n, _singular, plural), do: plural
 
   # " documents" — a leading space, or nothing when the scanner named no unit.
   defp unit(nil), do: ""

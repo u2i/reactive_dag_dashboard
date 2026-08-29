@@ -111,6 +111,65 @@ defmodule ReactiveDagDashboard.LiveUpdates do
   end
 
   @doc """
+  Note that `cell_id` BEGAN recomputing.
+
+  The counterpart to `record_step/3`, which records what a cell DID. A cell whose
+  recompute calls an LLM runs for minutes and reports nothing until it finishes, so
+  a page told only about steps holds the last thing it heard for exactly as long as
+  the slowest cell is working — after a poll, that is the poll's final phase, and a
+  working drain reads as a stall.
+
+  Not throttled, and never superseded by a later event of its own kind: there is one
+  per cell per pass, and the `:step` that follows replaces it.
+  """
+  @spec record_running(Phoenix.LiveView.Socket.t(), String.t(), non_neg_integer() | nil) ::
+          Phoenix.LiveView.Socket.t()
+  def record_running(socket, cell_id, claimed) do
+    seq = socket.assigns.step_seq
+    entry = %{running: claimed, at: System.monotonic_time(:millisecond), seq: seq}
+
+    socket
+    |> Phoenix.Component.assign(:activity, Map.put(socket.assigns.activity, cell_id, entry))
+    |> Phoenix.Component.assign(:step_seq, seq + 1)
+    |> Phoenix.Component.assign(:draining?, true)
+  end
+
+  @doc """
+  How far through a recompute `cell_id` is.
+
+  Throttled on the same timer as scan progress and for the same reason: an op emits
+  per unit of work, and dropping an intermediate count is free because the next one
+  supersedes it. A PHASE (no count) is never dropped — it has no successor.
+  """
+  @spec record_cell_progress(Phoenix.LiveView.Socket.t(), String.t(), tuple()) ::
+          Phoenix.LiveView.Socket.t()
+  def record_cell_progress(socket, cell_id, {nil, nil, _label} = state),
+    do: put_running(socket, cell_id, state)
+
+  def record_cell_progress(socket, cell_id, state) do
+    now = System.monotonic_time(:millisecond)
+    last = socket.assigns[:progress_at]
+
+    if is_integer(last) and now - last < @progress_ms do
+      socket
+    else
+      socket
+      |> Phoenix.Component.assign(:progress_at, now)
+      |> put_running(cell_id, state)
+    end
+  end
+
+  defp put_running(socket, cell_id, {done, total, label}) do
+    seq = socket.assigns.step_seq
+    entry = %{running: {done, total, label}, at: System.monotonic_time(:millisecond), seq: seq}
+
+    socket
+    |> Phoenix.Component.assign(:activity, Map.put(socket.assigns.activity, cell_id, entry))
+    |> Phoenix.Component.assign(:step_seq, seq + 1)
+    |> Phoenix.Component.assign(:draining?, true)
+  end
+
+  @doc """
   Note that `cell_id` was SCANNED, and what the poll found.
 
   The trail exists so a run is visible after the fact, and a poll that found

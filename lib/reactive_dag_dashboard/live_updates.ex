@@ -133,7 +133,16 @@ defmodule ReactiveDagDashboard.LiveUpdates do
   #
   # A `:running`, `:failed` or finished result is never dropped: those are the
   # events the page's honesty depends on.
-  def record_scan(socket, cell_id, {:progress, _done, _total} = state) do
+  # A PHASE is never throttled. The rationale above — "dropping an intermediate
+  # count is free: the next one supersedes it" — is exactly what does not hold
+  # here: a phase has no successor. It is the last thing the page will say for
+  # however long that phase takes, which on a real crawl is the slowest part. Drop
+  # it and the row keeps showing the frozen count the phase was meant to replace,
+  # which is the bug this whole path exists to fix.
+  def record_scan(socket, cell_id, {:progress, nil, nil, _label} = state),
+    do: put_scan(socket, cell_id, state)
+
+  def record_scan(socket, cell_id, {:progress, _done, _total, _label} = state) do
     now = System.monotonic_time(:millisecond)
 
     # `nil` rather than 0 as the "never" case: `System.monotonic_time/1` may be
@@ -179,7 +188,7 @@ defmodule ReactiveDagDashboard.LiveUpdates do
 
       # Progress, arriving per document. No trail expiry scheduled — the poll is
       # still going, and a `{:progress, …}` is not an outcome.
-      {:progress, _done, _total} ->
+      {:progress, _done, _total, _label} ->
         Phoenix.Component.assign(socket, :draining?, true)
 
       _ ->

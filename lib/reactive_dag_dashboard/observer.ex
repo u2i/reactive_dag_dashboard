@@ -22,7 +22,7 @@ defmodule ReactiveDagDashboard.Observer do
       {:drain_done, report}                  when the drain finishes
       {:drain_failed, reason}                when it raised
       {:scan_started, cell_id}               a poll began
-      {:scan_progress, cell_id, done, total} a poll advanced
+      {:scan_progress, cell_id, done, total, label} a poll advanced
       {:cell_failed, cell_id, reason}        one cell failed; the drain went on
       {:scan_done, cell_id, result}          a poll finished, changed or not
       {:scan_failed, cell_id, reason}        it raised
@@ -159,7 +159,13 @@ defmodule ReactiveDagDashboard.Observer do
   def handle([:reactive_dag, :scan, :progress], measurements, metadata, %{pubsub: pubsub}) do
     broadcast(
       pubsub,
-      {:scan_progress, metadata[:cell], measurements.done, measurements[:total]}
+      # `label` too: `Source.progress/3` has always accepted one ("34/721
+      # documents") and this dropped it, so the page could only ever count
+      # anonymous units. It is also what lets a scanner name the PHASE it is in —
+      # a crawl that has fetched everything and is now writing rows reads as a
+      # stall otherwise, because the fetch counter has stopped at n/n.
+      {:scan_progress, metadata[:cell], measurements.done, measurements[:total],
+       metadata[:label]}
     )
   end
 

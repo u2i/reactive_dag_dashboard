@@ -515,8 +515,8 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       # through the library, exactly as the button does
       {:ok, _} = ReactiveDag.Source.refresh(FixtureGraph.plan(), "expenses", recent: true)
 
-      assert_receive {:scan_progress, "expenses", 1, 3}
-      assert_receive {:scan_progress, "expenses", 3, 3}
+      assert_receive {:scan_progress, "expenses", 1, 3, "documents"}
+      assert_receive {:scan_progress, "expenses", 3, 3, "documents"}
     end
 
     test "and the page shows the count while it runs" do
@@ -1005,6 +1005,39 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert row =~ "ran · 1 changed", "the cell that did run still says so"
     end
 
+    test "a poll PHASE is shown, so a finished fetch does not read as a hang" do
+      # The bug this fixes: a crawl reports per document, so the counter reaches
+      # `34/34` when FETCHING ends — and then reclassifies, writes each leaf and
+      # reconciles, all of it silent behind that frozen number. On a real crawl
+      # that is the slowest part, and the page looked hung.
+      #
+      # A phase has no denominator; inventing one would be worse than naming the
+      # work. What a person waiting on a crawl needs here is what it is doing.
+      Observer.attach(@pubsub)
+      {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
+
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:scan_started, "expenses"})
+
+      Phoenix.PubSub.broadcast(
+        @pubsub,
+        Observer.topic(),
+        {:scan_progress, "expenses", 34, 34, "documents"}
+      )
+
+      assert live_row_html(render(view)) =~ "polling · 34/34 documents"
+
+      # …and then the phases, which is where it used to go quiet.
+      Phoenix.PubSub.broadcast(
+        @pubsub,
+        Observer.topic(),
+        {:scan_progress, "expenses", nil, nil, "writing 3 leaves"}
+      )
+
+      html = live_row_html(render(view))
+      assert html =~ "polling · writing 3 leaves"
+      refute html =~ "34/34", "the phase replaces the frozen count, it does not sit beside it"
+    end
+
     test "a poll in progress is visible too, not just the drain it triggers" do
       # A crawl is the SLOWEST thing that happens — minutes, where its drain is
       # milliseconds — so if anything deserves a live row it is this. `activity`
@@ -1016,8 +1049,11 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:scan_started, "expenses"})
       assert live_row_html(render(view)) =~ "polling…"
 
-      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:scan_progress, "expenses", 40, 120})
-      assert live_row_html(render(view)) =~ "polling · 40/120", "with the crawl's own progress"
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:scan_progress, "expenses", 40, 120, "documents"})
+      # …and the UNIT it counts. `Source.progress/3` has always accepted a label; the
+      # observer dropped it, so the page could only ever show anonymous numbers.
+      assert live_row_html(render(view)) =~ "polling · 40/120 documents",
+             "with the crawl's own progress, and what it is counting"
     end
 
     test "a poll and the drain it triggers stay in arrival order" do
@@ -1030,11 +1066,11 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       # A step FIRST, then the poll — so "poll before step" cannot be right by
       # arrival, only by the missing-seq bug.
       Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:drain_step, "spend_rollup", ["a"]})
-      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:scan_progress, "expenses", 7, 9})
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:scan_progress, "expenses", 7, 9, "documents"})
 
       row = live_row_html(render(view))
 
-      assert index_of(row, "spend_rollup") < index_of(row, "polling · 7/9"),
+      assert index_of(row, "spend_rollup") < index_of(row, "polling · 7/9 documents"),
              "the poll sits where it arrived, not pinned to the top"
     end
 

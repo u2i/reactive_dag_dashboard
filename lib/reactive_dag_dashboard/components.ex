@@ -911,9 +911,31 @@ defmodule ReactiveDagDashboard.Components do
 
   defp activity_label(%{scan: :running}), do: "polling…"
 
+  # A PHASE with no count — "polling · writing rows". A crawl reports several
+  # phases, and the ones after the fetch have no natural denominator: what a person
+  # needs there is what it is doing, not how far through.
+  #
+  # This is the clause that fixes a crawl reading as hung. The fetch counter stops
+  # at `n/n` and the slowest part — reclassifying and writing every leaf — used to
+  # run in silence behind that frozen number.
+  defp activity_label(%{scan: {:progress, nil, nil, phase}}) when is_binary(phase),
+    do: "polling · #{phase}"
+
   # A ratio while the total is known, a bare count while the crawl is still
   # discovering how much there is. "34 so far" is progress; waiting for a
   # denominator would report nothing during the discovery itself.
+  #
+  # `label` names what is being counted, so a page says "34/721 documents" rather
+  # than "34/721". `Source.progress/3` has always accepted it; this dropped it.
+  defp activity_label(%{scan: {:progress, done, total, label}})
+       when is_integer(total) and total > 0,
+       do: "polling · #{done}/#{total}#{unit(label)}"
+
+  defp activity_label(%{scan: {:progress, done, _total, label}}) when is_integer(done),
+    do: "polling · #{done}#{unit(label)}"
+
+  # The four-element form is current; these keep a dashboard reading events from an
+  # older library version rendering rather than crashing on a clause miss.
   defp activity_label(%{scan: {:progress, done, total}}) when is_integer(total) and total > 0,
     do: "polling · #{done}/#{total}"
 
@@ -938,6 +960,12 @@ defmodule ReactiveDagDashboard.Components do
   end
 
   defp activity_label(_), do: nil
+
+  # " documents" — a leading space, or nothing when the scanner named no unit.
+  defp unit(nil), do: ""
+  defp unit(""), do: ""
+  defp unit(label) when is_binary(label), do: " " <> label
+  defp unit(_), do: ""
 
   # A run synthesised from telemetry has the COUNT but not the key names — see
   # the observer — so the list is truthfully empty and the count rides in

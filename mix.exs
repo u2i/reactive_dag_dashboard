@@ -87,6 +87,11 @@ defmodule ReactiveDagDashboard.MixProject do
       # would mix every tenant's runs into whichever graph is on screen and count
       # `@log_runs` across all of them.
       #
+      # rc.57 for `[:reactive_dag, :drain, :cell_start]` and `Op.progress/3` — what
+      # the DRAIN is doing. `:step` fires only when a cell has finished, so against
+      # an older library the page holds the poll's last label through the whole
+      # drain, and an LLM cell running for minutes is invisible.
+      #
       # rc.56 for a PHASE — `Source.progress/3` with `done`/`total` nil and the
       # label alone. A crawl's counter stops at `n/n` when FETCHING ends and the
       # writes that follow are the slowest part, so without this the page holds a
@@ -106,7 +111,7 @@ defmodule ReactiveDagDashboard.MixProject do
       #   rc.27 — `Source.progress/3`; against rc.26 the fixture scanner could
       #           not emit it, so the tests passed on hand-fired telemetry
       #           while the real path went untested.
-      {:reactive_dag, "~> 0.17.0-rc.56"},
+      {:reactive_dag, "~> 0.17.0-rc.57"},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

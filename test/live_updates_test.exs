@@ -1005,6 +1005,51 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert row =~ "ran · 1 changed", "the cell that did run still says so"
     end
 
+    test "a recompute reports how far through it is, not just that it started" do
+      # The third level. `:cell_start` names the slow cell; this says how far
+      # through — the difference between "recomputing meeting_events" for four
+      # minutes and knowing it is moving.
+      Observer.attach(@pubsub)
+      {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
+
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:cell_running, "expenses", 34})
+      assert live_row_html(render(view)) =~ "recomputing · 34 keys"
+
+      Phoenix.PubSub.broadcast(
+        @pubsub,
+        Observer.topic(),
+        {:cell_progress, "expenses", 12, 34, "meetings"}
+      )
+
+      assert live_row_html(render(view)) =~ "recomputing · 12/34 meetings"
+    end
+
+    test "a RUNNING cell replaces the poll's last phase, so the drain is not a stall" do
+      # The second half of the reported hang. The poll's phases end when the poll
+      # returns — and then the DRAIN runs, which for an LLM cell is the minutes. The
+      # page held the poll's final label ("reconciling") through all of it, because
+      # `:drain, :step` only fires once a cell has FINISHED.
+      Observer.attach(@pubsub)
+      {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
+
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:scan_started, "expenses"})
+
+      Phoenix.PubSub.broadcast(
+        @pubsub,
+        Observer.topic(),
+        {:scan_progress, "expenses", nil, nil, "reconciling"}
+      )
+
+      assert live_row_html(render(view)) =~ "polling · reconciling"
+
+      # The cell begins recomputing. THAT is what the row must say now.
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:cell_running, "expenses", 12})
+
+      html = live_row_html(render(view))
+      assert html =~ "recomputing · 12 keys"
+      refute html =~ "reconciling", "the stale poll phase must not survive the drain"
+    end
+
     test "a poll PHASE is shown, so a finished fetch does not read as a hang" do
       # The bug this fixes: a crawl reports per document, so the counter reaches
       # `34/34` when FETCHING ends — and then reclassifies, writes each leaf and

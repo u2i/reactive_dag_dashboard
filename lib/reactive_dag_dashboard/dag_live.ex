@@ -29,13 +29,13 @@ defmodule ReactiveDagDashboard.DagLive do
   """
   use Phoenix.LiveView
 
-  # How many drains the log shows. The retention itself is the library's
+  # How many runs the log shows. The retention itself is the library's
   # (`config :reactive_dag, insights_keep:`); this only bounds the render.
   @log_runs 25
 
   import ReactiveDagDashboard.Components
 
-  alias ReactiveDag.Drain.Report
+  alias ReactiveDag.Report
   alias ReactiveDag.Insights
   alias ReactiveDag.Source
   alias ReactiveDagDashboard.{Actions, LiveUpdates, NodeDetail, Tree}
@@ -131,8 +131,12 @@ defmodule ReactiveDagDashboard.DagLive do
       case Actions.enqueue_scan(cell_id, mode, params, socket.assigns) do
         :queued ->
           # "as it drains" was a promise the page could not keep: a poll that
-          # finds nothing never drains, so nothing appeared and the button looked
-          # broken. The scan events now arrive either way.
+          # finds nothing enqueues no cascade, so nothing appeared and the button
+          # looked broken. The scan events now arrive either way.
+          #
+          # It is doubly right now: even a poll that DOES find something only
+          # enqueues the propagation, so the recompute lands in a later job and
+          # arrives as its own `:cascade_*` events rather than as part of this.
           {"scan of #{scope} queued — waiting for it to run", false}
 
         {:ran, %{unreachable: []} = result} ->
@@ -176,11 +180,11 @@ defmodule ReactiveDagDashboard.DagLive do
 
   @impl true
   # `changed` was discarded here. It is the number the trail shows — "ran, 12
-  # changed" is the difference between a cell that did work and one the drain
+  # changed" is the difference between a cell that did work and one the cascade
   # merely visited and found settled.
   # A cell BEGAN. Recorded as activity so the row says what is running now, rather
   # than holding the last thing that finished — which after a poll is that poll's
-  # final phase, and is why a working drain read as a stall.
+  # final phase, and is why a working cascade read as a stall.
   def handle_info({:cell_running, cell_id, claimed}, socket) do
     {:noreply,
      socket
@@ -197,7 +201,7 @@ defmodule ReactiveDagDashboard.DagLive do
      |> LiveUpdates.record_cell_progress(cell_id, {done, total, label})}
   end
 
-  def handle_info({:drain_step, cell_id, changed}, socket) do
+  def handle_info({:cascade_step, cell_id, changed}, socket) do
     {:noreply,
      socket
      |> LiveUpdates.seen_event()
@@ -209,19 +213,19 @@ defmodule ReactiveDagDashboard.DagLive do
     {:noreply, LiveUpdates.refresh_stale(socket, socket.assigns.plan)}
   end
 
-  def handle_info({:drain_done, _report}, socket) do
+  def handle_info({:cascade_done, _report}, socket) do
     {:noreply,
      socket |> LiveUpdates.seen_event() |> LiveUpdates.finish() |> load() |> assign_view()}
   end
 
-  def handle_info({:drain_failed, _reason}, socket) do
+  def handle_info({:cascade_failed, _reason}, socket) do
     {:noreply, socket |> LiveUpdates.seen_event() |> LiveUpdates.finish()}
   end
 
-  # ONE cell failed; the drain carried on. Marked on the trail rather than
-  # announced as a drain failure — its keys are still dirty and the next drain
-  # retries them, so "this did not run" is the honest reading, not "everything
-  # broke".
+  # ONE cell failed; the cascade carried on. Marked on the trail rather than
+  # announced as a cascade failure — its savepoint rolled back and the branch
+  # below it stopped, but everything else committed, so "this did not run" is
+  # the honest reading, not "everything broke".
   def handle_info({:cell_failed, cell_id, reason}, socket) do
     {:noreply,
      socket
@@ -229,14 +233,50 @@ defmodule ReactiveDagDashboard.DagLive do
      |> LiveUpdates.record_step(cell_id, {:failed, reason})}
   end
 
+  # THE CASCADE STOPPED HERE — and a full `load/1` follows, because this is the
+  # one event that changes what `Insights.pending/1` reports. A suspension is
+  # committed as it happens, so the resource appears in `pending` immediately;
+  # waiting for `:cascade_done` would leave the page showing a graph with no
+  # stopped work in it while a branch was already parked.
+  def handle_info({:suspended, cell_id, _waiting, reason, count}, socket) do
+    {:noreply,
+     socket
+     |> LiveUpdates.seen_event()
+     |> LiveUpdates.record_suspended(cell_id, reason, count)
+     |> load()
+     |> assign_view()}
+  end
+
+  # A job picked a stopping point back up. Nothing is cleared yet — the work is
+  # only now beginning, and it may fail — so the mark stays until
+  # `:resumption_done` says the suspensions were actually discharged.
+  def handle_info({:resumed, _cell_id, _waiting, _n}, socket) do
+    {:noreply, LiveUpdates.seen_event(socket)}
+  end
+
+  # …and cleared it. `load/1` again for the same reason as `:suspended`: the
+  # point has left the suspension table, so `pending` shrank.
+  def handle_info({:resumption_done, cell_id, _waiting, _discharged}, socket) do
+    {:noreply,
+     socket
+     |> LiveUpdates.seen_event()
+     |> LiveUpdates.record_resumed(cell_id)
+     |> load()
+     |> assign_view()}
+  end
+
   def handle_info(:clear_trail, socket), do: {:noreply, LiveUpdates.clear_trail(socket)}
 
   # ── the scan half ───────────────────────────────────────────────────────────
   #
   # A queued scan told the page "results appear as it drains" and then, if the
-  # poll found nothing, produced no events at all: a no-op scan dirties nothing,
-  # so no `:drain_step` ever arrives. The promise went unkept and the button
+  # poll found nothing, produced no events at all: a no-op scan enqueues nothing,
+  # so no `:cascade_step` ever arrives. The promise went unkept and the button
   # looked broken on exactly the runs where it worked perfectly.
+  #
+  # The scan's own events are therefore the whole of what a scan reports. What
+  # its findings go on to recompute is a separate job, and reaches the page as
+  # `:cascade_*` messages that name no scan at all.
 
   def handle_info({:scan_started, cell_id}, socket) do
     {:noreply,
@@ -305,7 +345,7 @@ defmodule ReactiveDagDashboard.DagLive do
   # Only what a scanner actually reported. A crawler that spends nothing says
   # nothing, rather than a reassuring "0 tok" on every plain fetch.
   #
-  # `detail_total/2` takes the poll result whole — a scan and a drain answer
+  # `detail_total/2` takes the poll result whole — a scan and a cascade answer
   # "what did this cost" through one fold rather than two that must agree.
   defp cost(result) do
     tokens = Source.detail_total(result, :tokens_in) + Source.detail_total(result, :tokens_out)
@@ -335,7 +375,21 @@ defmodule ReactiveDagDashboard.DagLive do
   #
   # `ScanRun.total/2` sums a cost key across BOTH phases — the poll's own spend
   # and every step's — because the bill for a scan is the pair, and reading only
-  # the drain's half understates a crawl that classifies with a model.
+  # the recompute's half understates a crawl that classifies with a model.
+  #
+  # ## A scan and its propagation are now SEPARATE log entries
+  #
+  # They used to be one. A poll drained in the same job, so a `%ScanRun{}`
+  # carried the report of the recompute it caused and one row said "polled, then
+  # recomputed these cells". A poll now enqueues a cascade and returns, so
+  # `run.report` is ALWAYS nil for anything the library produces and the cascade
+  # records itself as its own entry when it runs.
+  #
+  # Everything below therefore still nil-guards `report`, but the guard now
+  # covers the ordinary case rather than the exception: a host running a cascade
+  # synchronously and recording the run itself is the only way a report arrives
+  # attached to a poll. The recompute columns are simply absent on a scan row,
+  # which is honest — that work had not happened yet when the scan finished.
   defp runs(plan) do
     # THIS GRAPH's runs. The buffer is process-wide and holds every tenant's, so
     # an unfiltered read put a scan of the Town's graph in the log the page was
@@ -350,26 +404,41 @@ defmodule ReactiveDagDashboard.DagLive do
 
       %{
         at: at,
-        # THE POLL. Zero/empty on a bare drain, where there was none — and
+        # THE POLL. Zero/empty on a bare cascade, where there was none — and
         # `polled?` is what says which, rather than inferring it from a nil cell.
         polled?: polled?,
         scanned: run.cell,
-        # The WHOLE run: a scan's poll plus its drain. The drain's own share is
-        # below, and the gap between them is the poll — usually the larger
-        # number, and the reason a two-minute scan used to log as 6.1ms.
+        # The run's own wall time. For a scan that is the poll, and nothing else:
+        # the propagation it enqueues is a different job with a different
+        # duration, and it logs itself.
         duration_us: run.duration_us,
-        drain_us: report && report.duration_us,
+        cascade_us: report && report.duration_us,
         poll_changed: length(run.changed),
         # A scan that could not LOOK must never read as a scan that found
         # nothing. Carried whole, so the log can name the upstreams.
         unreachable: run.unreachable,
         complete?: ReactiveDag.ScanRun.complete?(run),
-        # THE DRAIN. Nil-safe throughout: a scan of an unscannable source
-        # completes without draining, and rendering "0 passes" for a drain that
-        # never happened would be reporting a fact about nothing.
-        drained?: ReactiveDag.ScanRun.drained?(run),
+        # THE RECOMPUTE. Nil-safe throughout, and now nil for every scan the
+        # library produces — see the note above. `cascaded?` says whether this
+        # row describes propagation at all, so the columns below are rendered
+        # only when they mean something.
+        #
+        # `ScanRun.drained?/1` is deprecated and answers false unconditionally,
+        # so this asks the report directly rather than routing a real question
+        # through a function that can only give one answer.
+        cascaded?: not is_nil(report),
         cells: (report && length(Report.cells(report))) || 0,
-        passes: (report && report.passes) || 0,
+        # WHERE IT STOPPED. New, and the field with no predecessor: a cascade
+        # that suspended finished cleanly with work parked, and nothing else on
+        # this row distinguishes that from a cascade with nothing left to do.
+        #
+        # This replaces `passes` on the log line. `passes` still exists on the
+        # report, but it counted drain-loop iterations over a queue and a
+        # cascade is a single walk — it is 0 or 1 now and says nothing a reader
+        # wants, whereas "stopped at 3 points" is the question a log gets read
+        # for.
+        suspended: (report && length(report.suspended)) || 0,
+        suspensions: (report && report.suspended) || [],
         changed: (report && Report.changed_total(report)) || 0,
         tokens_in: ReactiveDag.ScanRun.total(run, :tokens_in),
         tokens_out: ReactiveDag.ScanRun.total(run, :tokens_out),
@@ -391,7 +460,7 @@ defmodule ReactiveDagDashboard.DagLive do
   # rather than in the template because `:if` alongside `:for` is evaluated per
   # item and cannot say "unless the whole set is trivial".
   #
-  # Across both phases, like the total it breaks down — a poll and a drain
+  # Across both phases, like the total it breaks down — a poll and a cascade
   # commonly use different models (a classifier and a summariser are chosen
   # separately), which is exactly when the breakdown earns its place.
   defp tokens_by(run) do
@@ -413,9 +482,9 @@ defmodule ReactiveDagDashboard.DagLive do
   #
   # No graph walk is needed to build it: every step carries `triggered_by`, the
   # cell whose propagation dirtied it, which is the same parent edge
-  # `Tree.downstream/2` follows. A step with `triggered_by: nil` was dirty when
-  # the drain started — a poll marked it, or a human did — so those are the
-  # roots, and a run may have several.
+  # `Tree.downstream/2` follows. A step with `triggered_by: nil` is an ORIGIN —
+  # the cell the cascade was told had changed — so those are the roots, and a
+  # run may have several.
   #
   # ## How far down to draw: the run's own trace, plus ONE ring
   #
@@ -432,7 +501,7 @@ defmodule ReactiveDagDashboard.DagLive do
   # than a completed cascade.
   #
   # Drawing the FULL downstream tree with un-run cells greyed would say it, and
-  # costs too much: a drain touching 3 cells in a 33-cell graph would render 30
+  # costs too much: a cascade touching 3 cells in a 33-cell graph would render 30
   # grey rows, burying the 3 that did work under the graph's static shape. The
   # log is a record of what happened, not a picture of the plan.
   #
@@ -447,10 +516,15 @@ defmodule ReactiveDagDashboard.DagLive do
   defp run_tree(_plan, nil), do: []
 
   defp run_tree(plan, %Report{steps: steps}) do
-    # A cell recomputed more than once (a diamond re-dirtied on a later pass)
-    # keeps its LAST step, matching `Report.causes/1` — the drain's own
-    # bookkeeping — so the tree has one node per cell rather than a repeat whose
-    # two occurrences disagree about what changed.
+    # A cell recomputed more than once keeps its LAST step, matching
+    # `Report.causes/1` — the engine's own bookkeeping — so the tree has one node
+    # per cell rather than a repeat whose two occurrences disagree about what
+    # changed.
+    #
+    # Rarer than it was: a cascade merges everything queued for a cell before
+    # running it, so a diamond's apex recomputes ONCE where the drain's queue
+    # could only manage that by luck. The guard stays because a resumption's
+    # onward cascade can still revisit a cell within one report.
     by_cell = Map.new(steps, &{&1.cell, &1})
     ran = MapSet.new(steps, & &1.cell)
 
@@ -537,8 +611,27 @@ defmodule ReactiveDagDashboard.DagLive do
     |> assign(:controls, controls)
     |> assign(:sources, NodeDetail.sources(plan, controls))
     |> assign(:status, Map.new(Insights.summary(plan), &{&1.id, &1}))
-    |> assign(:pending, MapSet.new(Insights.pending(plan)))
-    # The drain log. Retained in ETS by `Insights.record/1`, so it is per-node
+    # RESOURCES WITH WORK SUSPENDED — where cascades have stopped and are
+    # waiting.
+    #
+    # What this means changed with the engine, and the old reading was the
+    # opposite of actionable. Under the queue, `pending` listed cells a drain had
+    # yet to reach: work in flight, clearing within seconds, and a name here was
+    # noise. A suspension is work that has STOPPED and will not resume until a
+    # job runs or a person acts — so a name appearing briefly is normal and a
+    # name that stays is a question.
+    #
+    # That reversal is why it is now rendered at all. It was assigned and never
+    # used, which was a defensible waste when the value cleared on its own; it
+    # is not when the value means "this graph is not finishing its work".
+    #
+    # `Suspension.points/1` carries the counts and ages behind these — a count
+    # climbing while `oldest` recedes is a point whose resumption keeps failing.
+    # Not read here: this page reloads on every cascade event, and the points
+    # query is per-tenant aggregate work that belongs behind a deliberate click
+    # rather than on every step of every run.
+    |> assign(:pending, Insights.pending(plan))
+    # The run log. Retained in ETS by `Insights.record/1`, so it is per-node
     # and does not survive a restart — which is the right trade for "what just
     # happened" and the wrong one for an audit trail. A host wanting the latter
     # stores reports where its runs already live; the library says so.
@@ -712,7 +805,7 @@ defmodule ReactiveDagDashboard.DagLive do
 
             The three rows below are a funnel: which question (`rdd-ask`), which
             cell (`rdd-starts`), which view of it (`rdd-bar`). Each narrows the
-            one above. `runs` answers none of those — it is a list of drains, a
+            one above. `runs` answers none of those — it is a list of runs, a
             different destination — so anywhere inside the funnel reads as a
             further narrowing, and it read that way at the end of the third row
             just as it did in the middle of it. Being a sibling of the title is
@@ -754,6 +847,34 @@ defmodule ReactiveDagDashboard.DagLive do
       </nav>
 
       <div :if={@message} class="rdd-alert"><%= @message %></div>
+
+      <%!-- WHERE THIS GRAPH HAS STOPPED. Above the funnel, like the tenant
+            switch, and for the same reason: it is a fact about the whole graph
+            rather than a narrowing of it, and it is the one thing on this page
+            a reader needs to see without having chosen a node first.
+
+            Rendered as a standing banner rather than a badge on a row because
+            a suspension is not a property of the node you happen to be looking
+            at — the whole point is that you are NOT looking at it, and the
+            branch below it has been quietly parked while everything on screen
+            looks healthy.
+
+            It is deliberately not an error. A suspension is the engine doing
+            what the node declared: expensive work does not hold a transaction
+            open, and work needing a person waits for one. What makes it worth
+            saying is duration, which this cannot show — so it names the
+            resources and leaves the judgement to the reader, who knows whether
+            `meeting_events` waiting is this minute's normal or this week's
+            problem. --%>
+      <div :if={@pending != []} class="rdd-waiting">
+        <span class="rdd-waiting-label">waiting</span>
+        <span class="rdd-waiting-body">
+          work is suspended at
+          <code :for={name <- @pending} class="rdd-waiting-name"><%= name %></code>
+          — a cascade reached each of these and stopped. It resumes when a job
+          runs or a person acts, not on its own.
+        </span>
+      </div>
 
       <%!-- DIRECTION FIRST. It is the question being asked, and it decides
             which cells can even be a starting point: downstream begins where
@@ -821,7 +942,7 @@ defmodule ReactiveDagDashboard.DagLive do
         :if={@view == :log}
         runs={@runs}
         activity={@activity}
-        draining?={@draining?}
+        cascading?={@cascading?}
       />
 
       <%!-- An isolated cell is in both lists and has a tree in neither. --%>

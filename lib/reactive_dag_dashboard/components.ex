@@ -134,6 +134,27 @@ defmodule ReactiveDagDashboard.Components do
                    padding: 9px 13px; margin-bottom: 14px; font-size: 12.5px;
                    color: var(--dim); max-width: 1080px }
 
+      /* WAITING — resources with work suspended. Shaped like `.rdd-alert`
+         because it occupies the same slot and a second layout there would read
+         as a different kind of thing; tinted `declared` rather than `gap`
+         because the graph is behaving exactly as its nodes declare. The accent
+         is reserved for something that just happened, and a suspension is
+         something that is STILL happening. */
+      .rdd-waiting { background: var(--panel2); border: 1px solid var(--border);
+                     border-left: 3px solid var(--declared); border-radius: 7px;
+                     padding: 9px 13px; margin-bottom: 14px; font-size: 12.5px;
+                     color: var(--dim); max-width: 1080px;
+                     display: flex; gap: 10px; align-items: baseline }
+      .rdd-waiting-label { font-family: ui-monospace, monospace; font-size: 9px;
+                           font-weight: 700; letter-spacing: .07em;
+                           text-transform: uppercase; color: var(--declared);
+                           flex: none }
+      .rdd-waiting-body { flex: 1 }
+      .rdd-waiting-name { font-family: ui-monospace, monospace; font-size: 11.5px;
+                          color: var(--ink); background: var(--panel);
+                          border: 1px solid var(--rule); border-radius: 3px;
+                          padding: 1px 5px; margin: 0 2px }
+
       .rdd-tabs { display: flex; gap: 3px }
       .rdd-tab { font: inherit; font-size: 11px; font-weight: 700; letter-spacing: .07em;
                  text-transform: uppercase; color: var(--faint); background: none;
@@ -333,10 +354,10 @@ defmodule ReactiveDagDashboard.Components do
       .rdd-op { font-family: ui-monospace, monospace; font-weight: 700; color: #9fb0c0;
                 text-transform: none; letter-spacing: 0; font-size: 10.5px }
       /* ── watching a cascade ───────────────────────────────────────────
-         A drain emits a step per cell in depth order, so a row lighting up as
+         A cascade emits a step per cell in depth order, so a row lighting up as
          its step arrives IS the wave. The pulse fires once on arrival (the
          class is new to that element, so the animation runs); the tint stays,
-         so when the drain finishes the page shows what the run touched rather
+         so when the cascade finishes the page shows what the run touched rather
          than reverting to a static tree.
 
          `prefers-reduced-motion` keeps the tint and drops the flash — the
@@ -360,6 +381,13 @@ defmodule ReactiveDagDashboard.Components do
          look" are different answers. */
       .rdd-ran-bad { background: color-mix(in srgb, var(--gap) 20%, transparent);
                      color: #e8918a }
+      /* WAITING — the cascade stopped here on purpose. `declared` rather than
+         `gap`: the node declared that this work cannot be done inline, so it is
+         behaving exactly as written, and tinting it like a failure would send
+         someone hunting a bug that is a design. It still must not wear the
+         accent, because a parked branch is not a finished one. */
+      .rdd-ran-wait { background: color-mix(in srgb, var(--declared) 20%, transparent);
+                      color: var(--declared) }
       @media (prefers-reduced-motion: reduce) {
         .rdd-ran { animation: none }
       }
@@ -426,12 +454,12 @@ defmodule ReactiveDagDashboard.Components do
       .rdd-children { margin-left: var(--indent); padding-left: 16px;
                       border-left: 1px dashed #283341 }
 
-      /* ── the drain log ─────────────────────────────────────────────────
+      /* ── the run log ───────────────────────────────────────────────────
          A run is a row; its steps nest under it. Tabular rather than the
          expression tree's cards: these are records to compare down a column,
          not a structure to read. */
       .rdd-log { max-width: 1080px }
-      /* The in-flight drain. Bordered in the live accent and NOT clickable —
+      /* The in-flight cascade. Bordered in the live accent and NOT clickable —
          there is no report to expand yet, so it must not look like the finished
          rows above it do. */
       .rdd-run-live { border-color: color-mix(in srgb, var(--measured) 55%, var(--border)) }
@@ -472,14 +500,21 @@ defmodule ReactiveDagDashboard.Components do
       }
       .rdd-run-calls { color: var(--faint) }
       .rdd-run-cached { color: var(--measured) }
-      /* the POLL's own half of a scan, ahead of the drain's counts */
+      /* the POLL's own half of a scan, ahead of the recompute's counts */
       .rdd-run-scan { color: var(--measured); margin-right: 8px }
-      /* the drain's share when it is only part of the run — parenthetical,
+      /* the cascade's share when it is only part of the run — parenthetical,
          because the number that matters is the whole */
-      .rdd-run-drainms { color: var(--faint); font-variant-numeric: tabular-nums }
+      .rdd-run-cascadems { color: var(--faint); font-variant-numeric: tabular-nums }
       /* A gap, in the gap hue. A scan that could not look is not a scan that
          found nothing, and this must not read as an ordinary count. */
       .rdd-run-gap { color: var(--gap); font-weight: 700; cursor: help }
+      /* WHERE THE CASCADE STOPPED. The gap hue too, and deliberately: a
+         suspension and an upstream the poll could not see are the same KIND of
+         fact — something this run did not manage to do — and the one thing a
+         reader must not do is read either as an ordinary count of work
+         completed. Unlike a gap it is not an error, so it takes the hue without
+         the weight. */
+      .rdd-run-susp { color: var(--gap); cursor: help }
 
       .rdd-run-steps { border-top: 1px solid var(--border); background: var(--bg);
                        padding: 4px 12px 6px }
@@ -676,9 +711,9 @@ defmodule ReactiveDagDashboard.Components do
               · <%= cadence(@details[@node.id]) %>
             </span>
 
-            <%!-- The cascade, as it travels. A `:drain_step` arrives per cell in
+            <%!-- The cascade, as it travels. A `:cascade_step` arrives per cell in
                   depth order, so a row that has an entry has RUN — and the
-                  trail outlives the drain, because the run you just watched is
+                  trail outlives the cascade, because the run you just watched is
                   the one whose results you want to read.
 
                   A SCAN entry lands here too, and it is the one that most needs
@@ -898,14 +933,33 @@ defmodule ReactiveDagDashboard.Components do
   #
   # A scan and a recompute are different events and read differently: "polled"
   # answers *did the crawl run*, "ran" answers *did this cell recompute*. A cell
-  # can have both in one burst — the poll found rows and the drain reached it —
+  # can have both in one burst — the poll found rows and the cascade reached it —
   # and then the recompute is the more specific fact, so it wins.
   defp activity_label(nil), do: nil
 
+  # SUSPENDED WINS over everything below it, including a `changed` on the same
+  # entry. A cell that recomputed and then suspended a later change is, right
+  # now, stopped — and "ran · 3 changed" over a parked branch is the reading this
+  # badge exists to prevent. The work that did happen is in the run log; what a
+  # row on screen needs to say is that it is waiting.
+  #
+  # The two reasons are named because they want different actions: `:expensive`
+  # waits on a job, `:approval` waits on a person, and only one of those is
+  # something an operator can go and do.
+  defp activity_label(%{suspended: %{reason: :approval}}), do: "waiting · needs approval"
+
+  defp activity_label(%{suspended: %{reason: :expensive, count: n}}) when n > 1,
+    do: "waiting · #{n} queued"
+
+  defp activity_label(%{suspended: %{reason: :expensive}}), do: "waiting · too costly inline"
+
+  defp activity_label(%{suspended: _}), do: "waiting"
+
   # BEFORE the changed-count clause, which would otherwise render the tuple.
-  # A cell that failed did not run: its keys are still dirty and the next drain
-  # retries them, so this must not read as a recompute that changed nothing.
-  defp activity_label(%{changed: {:failed, _reason}}), do: "did not run · retrying"
+  # A cell that failed did not run. There is no dirty queue holding the work now,
+  # so nothing retries it on its own — the change comes back when its source
+  # observes it again.
+  defp activity_label(%{changed: {:failed, _reason}}), do: "did not run"
 
   defp activity_label(%{changed: n}), do: "ran · #{n} changed"
 
@@ -1001,6 +1055,14 @@ defmodule ReactiveDagDashboard.Components do
   defp changed_count(%{changed: changed}), do: length(changed)
 
   # A failure and an outage are not successes and must not be tinted like one.
+  #
+  # A SUSPENSION is neither, and gets its own tint. Tinting it as a failure would
+  # send someone looking for a broken node; leaving it untinted would let a
+  # parked branch read as a completed one. It is a gap — work not done — which is
+  # the same class of fact as an unreachable upstream. First, for the same reason
+  # its label clause is first.
+  defp activity_class(%{suspended: _}), do: "rdd-ran-wait"
+
   defp activity_class(%{changed: {:failed, _reason}}), do: "rdd-ran-bad"
 
   defp activity_class(%{scan: %ReactiveDag.ScanRun{} = run}),
@@ -1036,13 +1098,21 @@ defmodule ReactiveDagDashboard.Components do
   attr(:runs, :list, required: true)
 
   @doc """
-  The drain log: one row per run, expandable to the cascade it caused — drawn as
+  The run log: one row per run, expandable to the cascade it caused — drawn as
   a TREE, in the shape of the downstream ("what a change breaks") view.
 
   A third view rather than something in a node's drawer, because a run is not a
-  property of a node. "What did the 13:04 drain do" spans cells, and the drawer
+  property of a node. "What did the 13:04 run do" spans cells, and the drawer
   can only ever answer "what has this cell done lately" — which is the question
   you have AFTER this one narrows it down.
+
+  ## A scan and its propagation are two rows, not one
+
+  They used to be one. A poll drained in the same job, so one row read "polled,
+  then recomputed these cells". A poll now ENQUEUES a cascade and returns, so a
+  scan row carries the poll and nothing else, and the recompute appears as its
+  own row when its job runs. A reader looking for what a scan caused looks at
+  the row below it, not inside it.
 
   Wall time and token spend side by side, because they are the two costs and they
   do not correlate: a cell can be slow because an LLM call was slow, or slow
@@ -1071,6 +1141,13 @@ defmodule ReactiveDagDashboard.Components do
       correctly ending rather than a cell that failed
     * **not reached** — never ran, because the cell above it stopped
 
+  A fourth is now possible and is counted on the run's header line rather than
+  drawn in the tree: **suspended**, where the cascade reached work it could not
+  do inline and parked it. That is not a cell that stopped because nothing
+  changed — it is a cell that has not run YET, and will not until a job or a
+  person acts. The count is on the row because it is the one outcome that
+  outlives the run.
+
   The third is the one a flat list renders as absence. A cell reporting 0
   changed is *why* everything below it is missing, and un-run children are drawn
   one ring deep to make that boundary visible — see `runs/1` for why one ring
@@ -1084,22 +1161,22 @@ defmodule ReactiveDagDashboard.Components do
   where its runs already live.
   """
   attr(:activity, :map, default: %{})
-  attr(:draining?, :boolean, default: false)
+  attr(:cascading?, :boolean, default: false)
 
   def log(assigns) do
     ~H"""
     <div class="rdd-log">
       <%!-- A run joins `@runs` when it FINISHES — the report is what gets
-            recorded, and there is no report until the drain is over. On a long
+            recorded, and there is no report until the cascade is over. On a long
             cascade that left this view empty and still for the whole run, under
             a promise that runs "appear here as they happen".
 
-            So the in-flight drain gets a row of its own, built from the same
-            `:drain_step` stream the tree pulses from. It is deliberately not a
+            So the in-flight cascade gets a row of its own, built from the same
+            `:cascade_step` stream the tree pulses from. It is deliberately not a
             `.rdd-run`: there are no totals to show yet, and rendering a partial
             count in the finished-run shape would invite reading it as one. It
-            disappears when `:drain_done` swaps in the real row. --%>
-      <div :if={@draining?} class="rdd-run rdd-run-live">
+            disappears when `:cascade_done` swaps in the real row. --%>
+      <div :if={@cascading?} class="rdd-run rdd-run-live">
         <div class="rdd-run-head">
           <span class="rdd-live-dot">●</span>
           <span class="rdd-run-at">running</span>
@@ -1118,8 +1195,8 @@ defmodule ReactiveDagDashboard.Components do
               `activity_label/1` and `activity_class/1` are the SAME functions
               the tree badges use, so the two views cannot drift into two
               vocabularies for one event. No tree here: the parent edge is in the
-              report, and there is no report until the drain ends — arrival order
-              is the honest structure while it runs. --%>
+              report, and there is no report until the cascade ends — arrival
+              order is the honest structure while it runs. --%>
         <div class="rdd-run-steps rdd-live-steps">
           <div :for={{id, entry} <- live_steps(@activity)} class="rdd-step rdd-live-step">
             <span class="rdd-step-cell"><%= id %></span>
@@ -1130,9 +1207,9 @@ defmodule ReactiveDagDashboard.Components do
         </div>
       </div>
 
-      <p :if={@runs == [] and not @draining?} class="rdd-prompt">
-        No drains recorded yet. Runs appear here as they happen — a scan, a
-        reprocess, or a write that dirtied something.
+      <p :if={@runs == [] and not @cascading?} class="rdd-prompt">
+        No runs recorded yet. Runs appear here as they happen — a scan, a
+        reprocess, or a write that changed something.
       </p>
 
       <div :for={{run, i} <- Enum.with_index(@runs)} class="rdd-run">
@@ -1141,16 +1218,35 @@ defmodule ReactiveDagDashboard.Components do
           <span class="rdd-run-at"><%= at(run.at) %></span>
 
           <span class="rdd-run-sum">
-            <%!-- A scan names the cell it polled and what the POLL found, which
-                  is a different fact from what the drain then recomputed — and
-                  on a long crawl it is most of what happened. --%>
+            <%!-- A scan names the cell it polled and what the POLL found. That
+                  is now the WHOLE of a scan row: the recompute it enqueues is a
+                  separate job and logs itself, so the cell counts beside this
+                  are absent rather than zero on a scan. --%>
             <span :if={run.polled?} class="rdd-run-scan">
               scan <%= run.scanned %> · <%= run.poll_changed %> found
             </span>
 
-            <%= run.cells %> cell<%= plural(run.cells) %>
-            · <%= run.passes %> pass<%= if run.passes == 1, do: "", else: "es" %>
-            · <%= run.changed %> changed
+            <%!-- Only for a row that actually describes propagation. `0 cells ·
+                  0 changed` on every scan row would be arithmetic about work
+                  that had not happened yet, which reads as a cascade that did
+                  nothing rather than one not yet run. --%>
+            <span :if={run.cascaded?}>
+              <%= run.cells %> cell<%= plural(run.cells) %>
+              · <%= run.changed %> changed
+            </span>
+
+            <%!-- WHERE IT STOPPED. This replaced the pass count, which counted
+                  drain-loop iterations over a queue: a cascade is a single walk,
+                  so that number is now always 0 or 1 and answers nothing.
+
+                  A suspension is the outcome that OUTLIVES the run — the branch
+                  is parked until a job runs or a person acts — so it is the one
+                  worth the space, and it is styled as a gap rather than a
+                  count because a run that stopped somewhere is not a run that
+                  finished. --%>
+            <span :if={run.suspended > 0} class="rdd-run-susp" title={suspended_title(run.suspensions)}>
+              · <%= run.suspended %> suspended
+            </span>
           </span>
 
           <%!-- A scan that could not LOOK must never read as a scan that found
@@ -1162,14 +1258,17 @@ defmodule ReactiveDagDashboard.Components do
           </span>
 
           <span class="rdd-run-cost">
-            <%!-- The WHOLE run. On a scan that is the poll plus its drain, and
-                  the poll is usually the larger number — a two-minute crawl
-                  used to log as its drain's `6.1ms`, which read as a fast run
-                  rather than a slow one reported wrongly. The drain's own share
-                  sits beside it when the two differ. --%>
+            <%!-- The run's own wall time. On a scan that is the poll and
+                  nothing else — a two-minute crawl used to log as its drain's
+                  `6.1ms`, which read as a fast run rather than a slow one
+                  reported wrongly, and the poll is all a scan row measures now.
+
+                  The parenthetical survives for a host that records a cascade it
+                  ran synchronously inside a scan, where the two genuinely
+                  differ. --%>
             <span class="rdd-run-ms"><%= ms(run.duration_us) %></span>
-            <span :if={run.drained? and run.drain_us && run.drain_us < run.duration_us} class="rdd-run-drainms">
-              (drain <%= ms(run.drain_us) %>)
+            <span :if={run.cascaded? and run.cascade_us && run.cascade_us < run.duration_us} class="rdd-run-cascadems">
+              (cascade <%= ms(run.cascade_us) %>)
             </span>
             <span :if={run.tokens_in + run.tokens_out > 0} class="rdd-run-tok">
               <%= tok(run.tokens_in + run.tokens_out) %> tok
@@ -1194,21 +1293,32 @@ defmodule ReactiveDagDashboard.Components do
           </span>
         </div>
 
-        <%!-- The cascade as a TREE, rooted at whatever was dirty when the drain
-              started. Nesting states the causal edge that `after X` used to
+        <%!-- The cascade as a TREE, rooted at the ORIGINS it was told had
+              changed. Nesting states the causal edge that `after X` used to
               spell out per row, so a fan-out of three reads as a fan-out
               rather than as three consecutive lines. --%>
         <div id={"run-#{i}"} class="rdd-run-steps hidden">
-          <%!-- A run with no steps is not an empty tree, it is a drain that
-                found nothing to do — which is a real outcome and reads as
-                broken when rendered as blank space. A scan that never drained
-                at all says that instead: no drain ran, so there is no cascade
-                to be missing. --%>
+          <%!-- Three different emptinesses, and collapsing them would report
+                two non-problems as the third.
+
+                A SCAN row has no cascade in it by construction — the poll
+                enqueued one and this row is the poll. Saying so is the point:
+                the work is not missing, it is in another row.
+
+                A cascade that stopped immediately at a suspension recomputed
+                nothing and is not idle; it is waiting.
+
+                Only the last is "there was nothing to do". --%>
           <p :if={run.roots == []} class="rdd-run-empty">
-            <%= if run.polled?  and not run.drained? do %>
-              The poll found nothing to recompute, so no drain ran.
-            <% else %>
-              Nothing was dirty — this drain recomputed no cells.
+            <%= cond do %>
+              <% run.polled? and not run.cascaded? -> %>
+                A scan enqueues its recompute rather than running it, so the
+                cascade this poll caused is logged as its own run.
+              <% run.suspended > 0 -> %>
+                Suspended before recomputing anything — this stopped rather than
+                finished, and waits on a job or a person.
+              <% true -> %>
+                Nothing to recompute — this cascade reached no cell that moved.
             <% end %>
           </p>
 
@@ -1282,19 +1392,29 @@ defmodule ReactiveDagDashboard.Components do
     end)
   end
 
+  # WHAT is waiting, not just how many. A count alone tells an operator a
+  # cascade stopped and nothing about where to go — and the two reasons want
+  # different actions: `:expensive` waits on a job, `:approval` waits on a
+  # person. Named per point, since one run can stop in several places.
+  defp suspended_title(suspensions) do
+    Enum.map_join(suspensions, ", ", fn s ->
+      "#{s[:waiting]} (#{s[:reason]})"
+    end)
+  end
+
   defp plural(1), do: ""
   defp plural(_), do: "s"
 
   # The steps so far, oldest first — the order the cascade actually travelled,
   # so the newest is at the bottom where the eye already is.
   #
-  # By `seq`, NOT `at`: a drain recomputes many cells inside one millisecond, so
+  # By `seq`, NOT `at`: a cascade recomputes many cells inside one millisecond, so
   # ordering a fast cascade by its ms timestamps is a tie broken arbitrarily by
   # map order, which shuffled the list on exactly the runs this is for.
   defp live_steps(activity), do: Enum.sort_by(activity, fn {_id, e} -> e[:seq] || 0 end)
 
   # The library's fold, not our own: a step's cost here and the same step's cost
-  # in a drain total are ONE fold rather than two that have to agree.
+  # in a run total are ONE fold rather than two that have to agree.
   defp step_tokens(%{meta: meta}) when is_map(meta) do
     Rollup.total([meta], :tokens_in) + Rollup.total([meta], :tokens_out)
   end
@@ -1323,7 +1443,7 @@ defmodule ReactiveDagDashboard.Components do
   @doc """
   A token count, in thousands past 1000.
 
-  A real drain spends tens of thousands and the exact digit is never the
+  A real cascade spends tens of thousands and the exact digit is never the
   question — "11.9k" answers "was this expensive" at a glance where "11902" has
   to be read.
 
@@ -1807,7 +1927,7 @@ defmodule ReactiveDagDashboard.Components do
   defp short(mod) when is_atom(mod), do: mod |> Module.split() |> List.last()
   defp short(other), do: inspect(other)
 
-  # Scaled, because this now labels drains as well as single recomputes and they
+  # Scaled, because this now labels whole runs as well as single recomputes and they
   # are three orders of magnitude apart. A 249-second crawl rendered as
   # "249000.0ms" is a number you have to count digits in to read.
   defp ms(us) when is_integer(us) and us >= 60_000_000 do

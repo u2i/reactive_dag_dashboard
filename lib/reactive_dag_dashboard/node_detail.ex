@@ -16,7 +16,7 @@ defmodule ReactiveDagDashboard.NodeDetail do
     * **what it holds** — key count and status histogram, and WHY the count is
       what it is (`rows: :stored | :elsewhere | :unreadable`), so an empty table
       and a node that keeps its rows elsewhere are not both rendered as broken.
-    * **what it recently did** — its steps from the retained drain reports:
+    * **what it recently did** — its steps from the retained cascade reports:
       how long, how many keys, and what triggered it.
     * **what counts as a change** — which columns the payload write compares
       when it decides a key moved. See `compare/1`.
@@ -216,7 +216,7 @@ defmodule ReactiveDagDashboard.NodeDetail do
   @doc """
   This cell's steps from the retained reports, newest first.
 
-  A step per recompute, carrying what the drain already measured — duration,
+  A step per recompute, carrying what the cascade already measured — duration,
   the keys claimed and changed, and which cell triggered it. That last field is
   the causal link a static graph cannot show: *this* recomputed because *that*
   moved.
@@ -226,8 +226,11 @@ defmodule ReactiveDagDashboard.NodeDetail do
     Insights.recent(:all)
     |> Enum.flat_map(fn %{run: run, at: at} ->
       # A retained run is a `%ScanRun{}` whether or not a poll produced it, and
-      # its `report` is nil for a scan that never drained — an unscannable
-      # source completes without recomputing anything. No drain, no steps.
+      # its `report` is nil for EVERY scan now: a poll enqueues a cascade rather
+      # than running one, so the steps arrive on the cascade's own retained
+      # entry. `Insights.record/1` wraps a bare `%Report{}` in a run to keep one
+      # shape, which is what makes this read the same either way — the only
+      # change is that the nil branch is now the common case for scans.
       case run.report do
         nil ->
           []

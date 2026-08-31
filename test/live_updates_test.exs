@@ -1,24 +1,33 @@
 defmodule ReactiveDagDashboard.LiveUpdatesTest do
   @moduledoc """
-  Real-time updates end to end: a real drain, its telemetry, the observer's
+  Real-time updates end to end: a real cascade, its telemetry, the observer's
   broadcast, and a LiveView that re-renders.
 
-  Deliberately driven by an actual `Drain.run/2` rather than a hand-sent
-  message. The chain has four links (drain → telemetry → PubSub → LiveView) and
-  a test that skips the first two would pass while the page stayed frozen —
+  Deliberately driven by an actual `Cascade.run/3` rather than a hand-sent
+  message. The chain has four links (cascade → telemetry → PubSub → LiveView)
+  and a test that skips the first two would pass while the page stayed frozen —
   which is the only failure mode that matters here.
 
-  The property the design rests on: a `:drain_step` names the cell that moved, so
-  the view re-reads **that cell** rather than the graph. `Insights.summary/1` is
-  one full table read per cell; doing it per drain step would make watching cost
-  more than the work being watched.
+  The property the design rests on: a `:cascade_step` names the cell that moved,
+  so the view re-reads **that cell** rather than the graph. `Insights.summary/1`
+  is one full table read per cell; doing it per cascade step would make watching
+  cost more than the work being watched.
+
+  ## Origins, not marks
+
+  Every cascade here starts from an explicit origin — `%{cell:, keys:}` — where
+  the old tests marked the frontier dirty and let a drain go looking. That is
+  the engine change in one line: a cascade is TOLD what moved and follows the
+  consequences, rather than reading a queue of conclusions about what needs
+  doing. There is no longer any way to say "something changed somewhere, go
+  find it", which is why no test here does.
   """
   use ExUnit.Case, async: false
 
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
 
-  alias ReactiveDag.{Drain, Frontier}
+  alias ReactiveDag.Cascade
   alias ReactiveDagDashboard.{FixtureGraph, LiveUpdates, Observer}
 
   @endpoint ReactiveDagDashboard.TestEndpoint
@@ -34,6 +43,24 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     prev = Application.get_env(:reactive_dag, :repo)
     Application.put_env(:reactive_dag, :repo, ReactiveDagDashboard.FakeRepo)
 
+    # A poll no longer propagates in its own job — it ENQUEUES a cascade per
+    # changed leaf, and the default enqueuer is Oban's, which raises outright
+    # when no Oban instance is running. This suite has none, and starting one to
+    # test a dashboard would be testing Oban.
+    #
+    # `:cascade_enqueuer` is the library's own seam for exactly this. Recording
+    # rather than running: what these tests assert is the SCAN's own telemetry
+    # reaching the page, and running the cascade inline here would put a second
+    # burst of `:cascade_*` events into every scan test and make each one
+    # dependent on the whole downstream graph.
+    prev_enqueuer = Application.get_env(:reactive_dag, :cascade_enqueuer)
+    test_pid = self()
+
+    Application.put_env(:reactive_dag, :cascade_enqueuer, fn cell, keys, opts ->
+      send(test_pid, {:cascade_enqueued, cell, keys, opts})
+      {:ok, :recorded}
+    end)
+
     FixtureGraph.seed()
     Observer.detach()
 
@@ -43,6 +70,10 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       if prev,
         do: Application.put_env(:reactive_dag, :repo, prev),
         else: Application.delete_env(:reactive_dag, :repo)
+
+      if prev_enqueuer,
+        do: Application.put_env(:reactive_dag, :cascade_enqueuer, prev_enqueuer),
+        else: Application.delete_env(:reactive_dag, :cascade_enqueuer)
     end)
 
     :ok
@@ -70,8 +101,14 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     end
   end
 
-  defp drain do
-    Drain.run(FixtureGraph.plan(),
+  # A cascade from the leaf every test in this file edits. `["*"]` is the
+  # whole-cell origin — the honest one here, because the fixture's edits go
+  # through Ash directly rather than through a write path that records which
+  # rows moved, so narrowing to named keys would be a claim the test cannot back.
+  defp cascade(keys \\ ["*"]) do
+    Cascade.run(
+      FixtureGraph.plan(),
+      [%{cell: "expenses", keys: keys}],
       recompute: ReactiveDag.Node.Recompute,
       key_rule: ReactiveDag.Node.KeyRule
     )
@@ -90,57 +127,58 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       refute Observer.attached?()
     end
 
-    test "a real drain broadcasts a step per recomputed cell, naming its keys" do
+    test "a real cascade broadcasts a step per recomputed cell, naming its keys" do
       Observer.attach(@pubsub)
       Phoenix.PubSub.subscribe(@pubsub, Observer.topic())
 
-      # the seed already computed every cell, so an unchanged drain correctly
+      # the seed already computed every cell, so an unchanged cascade correctly
       # reports NOTHING changed. Move a row first, or this proves only that the
       # events fire — not that they carry the keys.
       edit_travel_to(5.0)
-      Frontier.mark_dirty("expenses", ["*"], "edit")
-      {:ok, _report} = drain()
+      {:ok, _report} = cascade()
 
-      # the chain works from an actual drain, not a synthesised message
-      assert_receive {:drain_step, "category_health", ["travel"]}
-      assert_receive {:drain_done, %ReactiveDag.Drain.Report{}}
+      # the chain works from an actual cascade, not a synthesised message
+      assert_receive {:cascade_step, "category_health", ["travel"]}
+      assert_receive {:cascade_done, %ReactiveDag.Report{}}
     end
 
-    test "an UNCHANGED drain reports no changed keys — the cascade stays proportional" do
+    test "an UNCHANGED cascade reports no changed keys — it stays proportional" do
       Observer.attach(@pubsub)
       Phoenix.PubSub.subscribe(@pubsub, Observer.topic())
 
-      Frontier.mark_dirty("expenses", ["*"], "seed")
-      {:ok, _report} = drain()
+      {:ok, _report} = cascade()
 
       # nothing moved, so nothing is reported as moved. A consumer that re-read
       # on every step regardless would be doing the work this exists to avoid.
-      assert_receive {:drain_step, "category_health", []}
+      assert_receive {:cascade_step, "category_health", []}
     end
 
-    test "a failing drain broadcasts, rather than leaving the page waiting" do
+    test "a failing cascade broadcasts, rather than leaving the page waiting" do
       Observer.attach(@pubsub)
       Phoenix.PubSub.subscribe(@pubsub, Observer.topic())
 
-      Frontier.mark_dirty("expenses", ["*"], "seed")
-
-      assert_raise Drain.RunawayError, fn ->
-        Drain.run(FixtureGraph.plan(),
+      # `max_steps: 1` rather than the drain's `max_passes: 1`. A cascade has no
+      # pass loop to bound — it is one walk — so the budget it enforces is a
+      # STEP count, and exceeding it is the same diagnosis: a cycle, or a
+      # recompute that keeps re-dirtying its own inputs.
+      assert_raise Cascade.RunawayError, fn ->
+        Cascade.run(
+          FixtureGraph.plan(),
+          [%{cell: "expenses", keys: ["*"]}],
           recompute: ReactiveDag.Node.Recompute,
           key_rule: ReactiveDag.Node.KeyRule,
-          max_passes: 1
+          max_steps: 1
         )
       end
 
-      assert_receive {:drain_failed, %Drain.RunawayError{}}
+      assert_receive {:cascade_failed, %Cascade.RunawayError{}}
     end
 
-    test "a broadcast failure does not fail the drain" do
+    test "a broadcast failure does not fail the cascade" do
       # the dashboard is informational; it must never be able to break the engine
       Observer.attach(:no_such_pubsub)
-      Frontier.mark_dirty("expenses", ["*"], "seed")
 
-      assert {:ok, _report} = drain()
+      assert {:ok, _report} = cascade()
     end
   end
 
@@ -163,7 +201,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert html =~ "polling"
     end
 
-    test "a real drain updates the page without a poll tick" do
+    test "a real cascade updates the page without a poll tick" do
       Observer.attach(@pubsub)
       # the graph has several roots, so name the one this test is about rather
       # than relying on which sorts first
@@ -174,8 +212,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
 
       # bring it under the threshold; the recompute should flip it to present
       edit_travel_to(5.0)
-      Frontier.mark_dirty("expenses", ["*"], "edit")
-      {:ok, _} = drain()
+      {:ok, _} = cascade()
 
       # the flush is on a short timer, so wait for the render rather than assume it
       # travel flipped failing → present, so category_health now has 2 present
@@ -184,15 +221,14 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       refute render(view) =~ "failing"
     end
 
-    test "a drain the page did not cause still reaches it" do
-      # two dashboards, one drain: both hear it. This is why it is PubSub and not
+    test "a cascade the page did not cause still reaches it" do
+      # two dashboards, one cascade: both hear it. This is why it is PubSub and not
       # a direct handler per LiveView.
       Observer.attach(@pubsub)
       {:ok, a, _} = live(build_conn(), @path)
       {:ok, b, _} = live(build_conn(), "#{@path}/cell/expenses")
 
-      Frontier.mark_dirty("expenses", ["*"], "seed")
-      {:ok, _} = drain()
+      {:ok, _} = cascade()
 
       assert render_eventually(a, "expenses")
       assert render_eventually(b, "expenses")
@@ -255,11 +291,11 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
 
   describe "a scan that found nothing still shows it ran" do
     # The gap: a queued scan said "results appear as it drains", and a poll that
-    # found nothing dirties nothing — so no `:drain_step` ever arrived and the
+    # found nothing enqueues nothing — so no `:cascade_step` ever arrived and the
     # page was identical to one where the button was never pressed. A working
     # scan read as a broken button on exactly the runs where it worked.
 
-    test "the observer bridges scan telemetry, not only drain" do
+    test "the observer bridges scan telemetry, not only cascade" do
       Observer.attach(@pubsub)
       Phoenix.PubSub.subscribe(@pubsub, Observer.topic())
 
@@ -271,7 +307,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
         %{cell: "expenses", args: %{}, unreachable: [], report: nil}
       )
 
-      # A `%ScanRun{}` now, not a flattened map — the poll and the drain it
+      # A `%ScanRun{}` now, not a flattened map — the poll and the cascade it
       # triggered, as the worker put them on the event.
       assert_receive {:scan_done, "expenses", %ReactiveDag.ScanRun{unreachable: []}}
     end
@@ -306,7 +342,8 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert body(render(view)) =~ "rdd-ran-bad", "and marked as a problem"
     end
 
-    # A poll's own cost appears in no drain step — a scan and a drain are
+    # A poll's own cost appears in no cascade step — a poll and the cascade it
+    # enqueues are
     # separate phases — so `:scan, :stop` is the only place it can reach a live
     # page. A crawler that classifies each new document with a model spends on
     # every poll, and without this none of it is visible anywhere.
@@ -391,16 +428,16 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       refute body(render(view)) =~ "tok"
     end
 
-    test "a cell that failed WITHOUT failing the drain is shown as not having run" do
+    test "a cell that failed WITHOUT failing the cascade is shown as not having run" do
       # The gap this closes: a contained failure is neither a `:step` (it never
-      # recomputed) nor an `:exception` (the drain finished), so without a
-      # handler the page shows a clean drain over a cell that silently stayed
-      # dirty — work that did not happen looking like work that did.
+      # recomputed) nor an `:exception` (the cascade finished), so without a
+      # handler the page shows a clean cascade over a cell that silently did not
+      # run — work that did not happen looking like work that did.
       Observer.attach(@pubsub)
       {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
 
       :telemetry.execute(
-        [:reactive_dag, :drain, :cell_failed],
+        [:reactive_dag, :cascade, :cell_failed],
         %{duration_us: 10},
         %{cell: "category_health", pass: 1, reason: :upstream_down, claimed: ["travel"]}
       )
@@ -425,7 +462,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     end
 
     test "a recompute is the more specific fact, so it wins over the poll" do
-      # a cell can have both in one burst — the poll found rows AND the drain
+      # a cell can have both in one burst — the poll found rows AND the cascade
       # reached it. "ran · N changed" answers a different question from "polled".
       Observer.attach(@pubsub)
       {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
@@ -439,8 +476,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert render_eventually(view, "polled")
 
       edit_travel_to(31.0)
-      Frontier.mark_dirty("expenses", ["*"], "edit")
-      _ = drain()
+      _ = cascade()
 
       assert render_eventually(view, "changed")
     end
@@ -529,13 +565,12 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     end
   end
 
-  describe "the drain log" do
+  describe "the run log" do
     test "a run appears with its cells, timing and changed count" do
-      # Driven by a real drain and a real `Insights.record/1`, so the report
+      # Driven by a real cascade and a real `Insights.record/1`, so the report
       # shape is the library's rather than a fixture's idea of it.
       edit_travel_to(77.0)
-      Frontier.mark_dirty("expenses", ["*"], "edit")
-      {:ok, report} = drain()
+      {:ok, report} = cascade()
       ReactiveDag.Insights.record(report)
 
       {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
@@ -546,14 +581,13 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     end
 
     test "a run renders as a tree, with each cell nested under its trigger" do
-      # The re-shaping, driven by a real drain: `expenses` is the seeded root
+      # The re-shaping, driven by a real cascade: `expenses` is the origin
       # and `category_health` / `spend_rollup` / `expense_notes` hang off it.
       # A flat list said so only in an `after expenses` suffix per row; the tree
       # says it structurally, so a fan-out of three READS as a fan-out.
       ReactiveDag.Insights.forget_runs()
       edit_travel_to(4242.0)
-      Frontier.mark_dirty("expenses", ["*"], "edit")
-      {:ok, report} = drain()
+      {:ok, report} = cascade()
       ReactiveDag.Insights.record(report)
 
       {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
@@ -574,19 +608,18 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
 
     test "a cell that changed nothing is visibly distinct from one that changed something" do
       # The user's "except where there is no need to run", at the row level.
-      # In this drain `expenses` moves and `category_health` recomputes to the
+      # In this cascade `expenses` moves and `category_health` recomputes to the
       # same verdict — so one propagated and one did not, and the log has to
       # tell them apart rather than rendering both as "ran".
       ReactiveDag.Insights.forget_runs()
       edit_travel_to(4242.0)
-      Frontier.mark_dirty("expenses", ["*"], "edit")
-      {:ok, report} = drain()
+      {:ok, report} = cascade()
       ReactiveDag.Insights.record(report)
 
       # the fixture has to actually contain both states, or this proves nothing
       changed_none = Enum.filter(report.steps, &(&1.changed == []))
       changed_some = Enum.filter(report.steps, &(&1.changed != []))
-      assert changed_none != [], "the drain must contain a cell that stopped"
+      assert changed_none != [], "the cascade must contain a cell that stopped"
       assert changed_some != [], "and one that propagated"
 
       {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
@@ -607,10 +640,10 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       # happens; the run must say WHERE it stopped rather than leaving the
       # absence to be inferred.
       #
-      # Hand-built so the boundary is unambiguous: a real drain over this
+      # Hand-built so the boundary is unambiguous: a real cascade over this
       # fixture reaches the diamond's tip by the other branch, which is the
       # correct behaviour tested below and the wrong shape for pinning THIS.
-      report = %ReactiveDag.Drain.Report{
+      report = %ReactiveDag.Report{
         passes: 2,
         duration_us: 1_000,
         steps: [
@@ -652,7 +685,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert steps =~ "rdd-step-unrun", "drawn apart from the cells that did run"
 
       # ONE ring, not the whole downstream tree: `verdict_audit` is below
-      # `all_verdicts` and must not be drawn. A 3-cell drain in a 33-cell graph
+      # `all_verdicts` and must not be drawn. A 3-cell cascade in a 33-cell graph
       # would otherwise render the graph's static shape in grey and bury the
       # work that actually happened.
       refute steps =~ "verdict_audit",
@@ -661,16 +694,37 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
 
     test "a cell reached by another branch is not called unreached" do
       # The trap in drawing the boundary from `plan.parents`: `all_verdicts` has
-      # two inputs, so when `category_health` stops but `spend_rollup` changes,
+      # two inputs, so when one of them stops and the other changes,
       # `all_verdicts` DOES run. Listing it as "not reached" under the branch
       # that stopped would be a false statement about a cell on screen.
+      #
+      # The split is engineered by ADDING a travel row rather than repricing the
+      # existing one. `spend_rollup` counts rows per category and `category_health`
+      # sums their amounts, so a second travel row at the same total moves the
+      # count without moving the sum: `spend_rollup` changes, `category_health`
+      # does not, and the diamond is reached down exactly one of its two legs.
+      #
+      # It used to be a reprice, which moved `category_health` and left
+      # `spend_rollup` still — the mirror image. That worked under the drain
+      # because a dirty mark on the leaf reached BOTH consumers regardless of
+      # what changed, so the tip ran either way. A cascade only continues from a
+      # cell that actually moved, so the branch that stops now genuinely stops,
+      # and the test has to pick the leg that keeps going.
       ReactiveDag.Insights.forget_runs()
-      edit_travel_to(4242.0)
-      Frontier.mark_dirty("expenses", ["*"], "edit")
-      {:ok, report} = drain()
+
+      FixtureGraph.Expenses
+      |> Ash.Changeset.for_create(:upsert, %{key: "e1", category: "travel", amount: 250.0})
+      |> Ash.create!()
+
+      FixtureGraph.Expenses
+      |> Ash.Changeset.for_create(:upsert, %{key: "e3", category: "travel", amount: 250.0})
+      |> Ash.create!()
+
+      {:ok, report} = cascade()
       ReactiveDag.Insights.record(report)
 
-      # the drain really does have this shape, or the test is vacuous
+      # the cascade really does have this shape, or the test is vacuous
+      assert Enum.any?(report.steps, &(&1.cell == "spend_rollup" and &1.changed != []))
       assert Enum.any?(report.steps, &(&1.cell == "category_health" and &1.changed == []))
       assert Enum.any?(report.steps, &(&1.cell == "all_verdicts"))
 
@@ -690,25 +744,32 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
              "it ran via spend_rollup — naming it unreached would contradict its own row"
     end
 
-    test "a scan reports the POLL's duration, not just its drain's" do
+    test "a scan reports the POLL's duration, not just its cascade's" do
       # The regression the library change exists to fix: the buffer used to hold
-      # the bare report, so a two-minute crawl logged as its drain's few
+      # the bare report, so a two-minute crawl logged as its recompute's few
       # milliseconds. The poll is usually the larger half and it is now the
       # number on the row.
+      #
+      # The library no longer BUILDS a run of this shape — a poll enqueues its
+      # cascade rather than running one, so `report` is nil on every scan it
+      # produces. Constructed by hand here on purpose: a host may still populate
+      # the field (a wrapper running a cascade synchronously), the field is kept
+      # for exactly that, and the parenthetical only appears when the two
+      # durations genuinely differ. This is the case that exercises it.
       ReactiveDag.Insights.forget_runs()
 
       ReactiveDag.Insights.record(%ReactiveDag.ScanRun{
         cell: "expenses",
         changed: ["e1"],
-        # two minutes of polling around a 5ms drain
+        # two minutes of polling around a 5ms recompute
         duration_us: 120_000_000,
-        report: %ReactiveDag.Drain.Report{passes: 1, duration_us: 5_000, steps: []}
+        report: %ReactiveDag.Report{passes: 1, duration_us: 5_000, steps: []}
       })
 
       {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
 
       assert html =~ "2m00s", "the WHOLE run — the poll is most of it"
-      assert html =~ "drain 5.0ms", "with the drain's own share beside it"
+      assert html =~ "cascade 5.0ms", "with the recompute's own share beside it"
       assert html =~ "scan expenses", "and the run names the cell it polled"
       assert html =~ "1 found", "and what the poll itself turned up"
     end
@@ -724,7 +785,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
         changed: [],
         unreachable: [{"archive", :timeout}],
         duration_us: 9_000,
-        report: %ReactiveDag.Drain.Report{passes: 1, duration_us: 5_000, steps: []}
+        report: %ReactiveDag.Report{passes: 1, duration_us: 5_000, steps: []}
       })
 
       {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
@@ -738,11 +799,16 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert html =~ "archive", "the unreachable upstream is named"
     end
 
-    test "a scan that never drained renders as itself, not as a broken drain" do
-      # An unscannable source (no credential, integration off) is a COMPLETED
-      # scan that found nothing, and it now produces a row where it used to
-      # record nothing at all. `report` is nil, so every drain-side number has
-      # to be nil-safe and the panel must not imply a drain that never ran.
+    test "a scan with no cascade in it renders as itself, not as a broken run" do
+      # `report` is nil, so every recompute-side number has to be nil-safe and
+      # the panel must not imply a cascade that never ran.
+      #
+      # This used to be the UNSCANNABLE case only — a source with no credential
+      # completes without draining. It is now the shape of EVERY scan the
+      # library produces, because a poll enqueues its cascade instead of running
+      # one. The panel's job changed with it: it no longer says "no drain ran",
+      # which would be a false claim about work that is queued, but says where
+      # that work is instead.
       ReactiveDag.Insights.forget_runs()
 
       ReactiveDag.Insights.record(%ReactiveDag.ScanRun{
@@ -758,8 +824,8 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert html =~ "rdd-run", "the run is still logged"
       assert html =~ "scan expenses", "and says what it polled"
 
-      assert html =~ "no drain ran",
-             "a scan with no drain says so, rather than showing an empty cascade"
+      assert html =~ "logged as its own run",
+             "a scan points at where its recompute went, rather than at an empty cascade"
     end
 
     test "a run with no steps says so, rather than rendering an empty tree" do
@@ -767,7 +833,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       # broken panel, so the run states it.
       ReactiveDag.Insights.forget_runs()
 
-      ReactiveDag.Insights.record(%ReactiveDag.Drain.Report{
+      ReactiveDag.Insights.record(%ReactiveDag.Report{
         passes: 0,
         duration_us: 40,
         steps: []
@@ -775,7 +841,44 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
 
       {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
 
-      assert html =~ "recomputed no cells", "an empty drain explains itself"
+      assert html =~ "Nothing to recompute", "an empty cascade explains itself"
+    end
+
+    test "a cascade that suspended before recomputing says THAT, not 'nothing to do'" do
+      # The third emptiness, and the one with no predecessor. A cascade that
+      # stopped at its first cell has no steps — identical in shape to a cascade
+      # that found nothing to do, and the opposite in meaning: one is finished,
+      # the other is waiting on a job or a person.
+      #
+      # Collapsing them would report work that has STOPPED as work that was
+      # unnecessary, which is the single most misleading thing this panel could
+      # say.
+      ReactiveDag.Insights.forget_runs()
+
+      ReactiveDag.Insights.record(%ReactiveDag.Report{
+        passes: 1,
+        duration_us: 40,
+        steps: [],
+        suspended: [
+          %{
+            tenant: "*",
+            waiting: "expense_notes",
+            resource: "expenses",
+            row_uuid: "e1",
+            reason: :expensive
+          }
+        ]
+      })
+
+      {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
+
+      assert html =~ "1 suspended", "the stop is counted on the run's own line"
+
+      assert html =~ "Suspended before recomputing anything",
+             "and the empty tree explains that it stopped rather than finished"
+
+      refute html =~ "Nothing to recompute",
+             "a cascade that stopped is not a cascade that had nothing to do"
     end
 
     test "`runs` is in the page header, outside the node funnel" do
@@ -809,7 +912,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
         [_, region_html] = String.split(rest, opener, parts: 2)
 
         refute region_html |> String.split("</div>", parts: 2) |> hd() =~ "runs",
-               "runs is a list of drains, not a narrowing inside #{region}"
+               "runs is a list of runs, not a narrowing inside #{region}"
       end
     end
 
@@ -823,9 +926,9 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert nav =~ "graph"
     end
 
-    test "a drain that finishes while the log is open appears without a reload" do
+    test "a cascade that finishes while the log is open appears without a reload" do
       # The whole point of the view: you open it, something runs, and you see
-      # it. Every other test in here loads the page AFTER the drain, which
+      # it. Every other test in here loads the page AFTER the cascade, which
       # proves the rendering and says nothing about whether an open page
       # notices. This one opens first and never reloads.
       ReactiveDag.Insights.forget_runs()
@@ -842,21 +945,20 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert runs.(html) == 0, "precondition: nothing has run yet"
 
       edit_travel_to(1234.0)
-      Frontier.mark_dirty("expenses", ["*"], "edit")
-      {:ok, report} = drain()
+      {:ok, report} = cascade()
       ReactiveDag.Insights.record(report)
 
-      # `record/1` fills the ETS table; `:drain_done` is what tells the page to
+      # `record/1` fills the ETS table; `:cascade_done` is what tells the page to
       # go and look. Ordering matters — the broadcast must land after the
       # record, which is the order the real observer uses.
-      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:drain_done, report})
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:cascade_done, report})
 
       assert runs.(render(view)) == 1,
              "an open log must show a run that finished while it was open"
     end
 
     test "a page with no pubsub still picks the run up on its refresh tick" do
-      # The fallback half. With no pubsub the page never hears `:drain_done`,
+      # The fallback half. With no pubsub the page never hears `:cascade_done`,
       # so the ONLY thing that can surface a finished run is the poll timer.
       # Sending `:refresh` by hand is what that timer does.
       ReactiveDag.Insights.forget_runs()
@@ -871,8 +973,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert runs.(html) == 0
 
       edit_travel_to(99.0)
-      Frontier.mark_dirty("expenses", ["*"], "edit")
-      {:ok, report} = drain()
+      {:ok, report} = cascade()
       ReactiveDag.Insights.record(report)
 
       send(view.pid, :refresh)
@@ -881,7 +982,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
              "the refresh tick must reload the log, not just the tree"
     end
 
-    test "a drain IN FLIGHT shows a live row naming the wave front" do
+    test "a cascade IN FLIGHT shows a live row naming the wave front" do
       # A run only joins `@runs` when it finishes, because the report is what
       # gets recorded and there is no report until it is over. On a long cascade
       # that left this view empty and motionless for the whole run — under an
@@ -893,15 +994,15 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
 
       {:ok, view, html} = live(build_conn(), "#{@path}?view=log")
       refute html =~ live_row, "nothing is running yet"
-      assert html =~ "No drains recorded yet"
+      assert html =~ "No runs recorded yet"
 
-      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:drain_step, "expenses", ["*"]})
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:cascade_step, "expenses", ["*"]})
       html = render(view)
 
-      assert html =~ live_row, "an in-flight drain must be visible while it runs"
+      assert html =~ live_row, "an in-flight cascade must be visible while it runs"
       assert html =~ "1 cell so far"
 
-      refute html =~ "No drains recorded yet",
+      refute html =~ "No runs recorded yet",
              "the empty state must yield to the run that is happening"
 
       # Per-cell, in the expression tab's own vocabulary — not a summary line.
@@ -910,7 +1011,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       Phoenix.PubSub.broadcast(
         @pubsub,
         Observer.topic(),
-        {:drain_step, "category_health", ["a", "b"]}
+        {:cascade_step, "category_health", ["a", "b"]}
       )
 
       html = render(view)
@@ -925,10 +1026,9 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
 
       # ...and it gives way to the real row once the run is over.
       edit_travel_to(7.0)
-      Frontier.mark_dirty("expenses", ["*"], "edit")
-      {:ok, report} = drain()
+      {:ok, report} = cascade()
       ReactiveDag.Insights.record(report)
-      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:drain_done, report})
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:cascade_done, report})
 
       html = render(view)
       refute html =~ live_row, "the live row is replaced by the finished one"
@@ -950,7 +1050,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       ids = ~w(spend_rollup expenses budget_gap category_health)
 
       for id <- ids do
-        Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:drain_step, id, ["*"]})
+        Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:cascade_step, id, ["*"]})
       end
 
       row = live_row_html(render(view))
@@ -977,15 +1077,19 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       assert order == ids, "the list follows the cascade, whatever the clock says"
     end
 
-    test "a cell that failed mid-drain says so, in the tree's own words" do
+    test "a cell that failed mid-cascade says so, in the tree's own words" do
       # The reason the live row reuses `activity_label/1` rather than printing
-      # its own count. A failed cell did NOT run — its keys are still dirty and
-      # the next drain retries them — and a row that rendered every step as
+      # its own count. A failed cell did NOT run — its savepoint rolled back and
+      # the branch below it stopped — and a row that rendered every step as
       # "ran" would report a failure as a success.
+      #
+      # Nothing retries it, either. There is no dirty queue holding the work now,
+      # so the change returns only when its source observes it again, which makes
+      # the distinction this badge draws more load-bearing than it was.
       Observer.attach(@pubsub)
       {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
 
-      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:drain_step, "expenses", ["*"]})
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:cascade_step, "expenses", ["*"]})
 
       Phoenix.PubSub.broadcast(
         @pubsub,
@@ -995,7 +1099,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
 
       row = live_row_html(render(view))
 
-      assert row =~ "did not run · retrying", "a failure is not a recompute"
+      assert row =~ "did not run", "a failure is not a recompute"
       # The rendered ATTRIBUTE, not the bare class name: the stylesheet is
       # inlined in the page, so `=~ "rdd-ran-bad"` matches the CSS rule itself
       # and passes with the tint removed.
@@ -1028,7 +1132,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       # The second half of the reported hang. The poll's phases end when the poll
       # returns — and then the DRAIN runs, which for an LLM cell is the minutes. The
       # page held the poll's final label ("reconciling") through all of it, because
-      # `:drain, :step` only fires once a cell has FINISHED.
+      # `:cascade, :step` only fires once a cell has FINISHED.
       Observer.attach(@pubsub)
       {:ok, view, _html} = live(build_conn(), "#{@path}?view=log")
 
@@ -1110,7 +1214,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
 
       # A step FIRST, then the poll — so "poll before step" cannot be right by
       # arrival, only by the missing-seq bug.
-      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:drain_step, "spend_rollup", ["a"]})
+      Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:cascade_step, "spend_rollup", ["a"]})
       Phoenix.PubSub.broadcast(@pubsub, Observer.topic(), {:scan_progress, "expenses", 7, 9, "documents"})
 
       row = live_row_html(render(view))
@@ -1132,13 +1236,13 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
 
       {:ok, _view, html} = live(build_conn(), "#{@path}?view=log")
 
-      assert html =~ "No drains recorded yet"
+      assert html =~ "No runs recorded yet"
     end
 
     test "token spend is rolled up from step meta, when a strategy reports it" do
       # `Report.total/2` sums a key across steps and ignores steps lacking it —
       # so a graph where only the LLM ops report tokens still totals correctly.
-      report = %ReactiveDag.Drain.Report{
+      report = %ReactiveDag.Report{
         passes: 1,
         duration_us: 1_800_000,
         steps: [
@@ -1196,7 +1300,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     end
 
     test "a single-model drain shows no breakdown — it would repeat the total" do
-      report = %ReactiveDag.Drain.Report{
+      report = %ReactiveDag.Report{
         passes: 1,
         duration_us: 1_000,
         steps: [
@@ -1247,7 +1351,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     end
 
     defp report_with_models do
-      %ReactiveDag.Drain.Report{
+      %ReactiveDag.Report{
         passes: 1,
         duration_us: 2_000_000,
         steps: [
@@ -1279,7 +1383,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
     end
 
     test "steps carry their own timing, so a slow cell is findable" do
-      report = %ReactiveDag.Drain.Report{
+      report = %ReactiveDag.Report{
         passes: 1,
         duration_us: 1_000_000,
         steps: [
@@ -1308,14 +1412,13 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
 
   describe "watching the cascade" do
     test "a row that ran shows it, with the keys it changed" do
-      # driven by a real drain: the wave is the sequence of `:drain_step`s, and
+      # driven by a real cascade: the wave is the sequence of `:cascade_step`s, and
       # a row carrying a trail is one that has had its step
       Observer.attach(@pubsub)
       {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
 
       edit_travel_to(999.0)
-      Frontier.mark_dirty("expenses", ["*"], "edit")
-      _ = drain()
+      _ = cascade()
 
       assert render_eventually(view, "rdd-ran-badge")
       assert body(render(view)) =~ "changed"
@@ -1328,8 +1431,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
 
       edit_travel_to(1234.0)
-      Frontier.mark_dirty("expenses", ["*"], "edit")
-      _ = drain()
+      _ = cascade()
 
       assert render_eventually(view, "rdd-ran")
 
@@ -1347,8 +1449,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
 
       edit_travel_to(555.0)
-      Frontier.mark_dirty("expenses", ["*"], "edit")
-      _ = drain()
+      _ = cascade()
 
       assert render_eventually(view, "rdd-ran-badge")
 
@@ -1362,8 +1463,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
 
       edit_travel_to(777.0)
-      Frontier.mark_dirty("expenses", ["*"], "edit")
-      _ = drain()
+      _ = cascade()
       assert render_eventually(view, "rdd-ran-badge")
 
       send(view.pid, :clear_trail)
@@ -1376,8 +1476,7 @@ defmodule ReactiveDagDashboard.LiveUpdatesTest do
       {:ok, view, _} = live(build_conn(), "#{@path}/cell/expenses")
 
       edit_travel_to(42.0)
-      Frontier.mark_dirty("expenses", ["*"], "edit")
-      _ = drain()
+      _ = cascade()
 
       Process.sleep(120)
       refute body(render(view)) =~ "rdd-ran-badge"

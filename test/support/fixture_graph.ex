@@ -166,6 +166,19 @@ defmodule ReactiveDagDashboard.FixtureGraph do
     reactive do
       id(:all_verdicts)
 
+      # `key_rule :all` because this node's key is a PAIR — `check|subject` —
+      # and an input's changed key is only the subject half. `:identity`, the
+      # default, would pass `"travel"` through as a claim against a cell keyed
+      # `"category_health|travel"`, which names no row of this node: the
+      # recompute reads nothing and the stale row survives.
+      #
+      # Latent until the engine changed. The drain reached this cell with a
+      # whole-cell claim, because the dirty queue coalesced to `"*"` on the way
+      # here and the mismatch never showed. A cascade propagates the actual
+      # changed keys, so the declaration a union of a re-keyed input always
+      # needed is now the declaration it must have.
+      key_rule(:all)
+
       union(
         from: [:category_health, :spend_rollup],
         into: [check: :cell, subject: :key, status: :status]
@@ -197,6 +210,25 @@ defmodule ReactiveDagDashboard.FixtureGraph do
 
     reactive do
       id(:verdict_audit)
+
+      # `key_rule :all` for the same reason `all_verdicts` needs it, one rung
+      # further along: this node is keyed by the STATUS VALUE it groups on, and
+      # its input's changed key is a `check|subject` pair. `:identity` would
+      # claim `"category_health|travel"` against a cell whose rows are keyed
+      # `"present"` / `"failing"` / `"thin"` — a claim naming no row.
+      #
+      # The failure it produces is the one a group-keyed node always risks: a
+      # group that EMPTIES is only noticed by recomputing the groups that could
+      # have lost a member, and a claim that names no group notices nothing. So
+      # the last row that reported `failing` survived after nothing was failing
+      # any more.
+      #
+      # `:group` would be the precise rule and this node cannot use it: it groups
+      # on `status`, a column the reduce COMPUTES rather than one the input row
+      # carries, so there is nothing to resolve a changed key against. Whole-cell
+      # is the honest claim for a node whose grouping key is derived — expensive,
+      # correct, and the same trade the library names for a `"*"` version.
+      key_rule(:all)
 
       reduce(
         over: :all_verdicts,

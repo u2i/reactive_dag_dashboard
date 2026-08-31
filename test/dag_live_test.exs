@@ -276,10 +276,14 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     end
 
     test "and what it recently did, with the cell that triggered it" do
-      ReactiveDag.Frontier.mark_dirty("expenses", ["e1"], "test")
-
+      # A cascade is TOLD its origin rather than reading a dirty queue to find
+      # one, so the mark-then-drain pair collapses into a single call naming the
+      # cell and keys that moved. `triggered_by` — the field this test is about
+      # — is unchanged: it is still the cell whose propagation reached this one.
       {:ok, report} =
-        ReactiveDag.Drain.run(FixtureGraph.plan(),
+        ReactiveDag.Cascade.run(
+          FixtureGraph.plan(),
+          [%{cell: "expenses", keys: ["e1"]}],
           recompute: ReactiveDag.Node.Recompute,
           key_rule: ReactiveDag.Node.KeyRule
         )

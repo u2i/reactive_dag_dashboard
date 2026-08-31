@@ -228,16 +228,37 @@ defmodule ReactiveDagDashboard.TenantSwitchTest do
 
   describe "the runs log is this graph's" do
     # `ReactiveDag.Insights` keeps ONE process-wide window of runs. Every tenant's
-    # drain lands in it, so an unfiltered read showed a scan of the Borough's
+    # cascade lands in it, so an unfiltered read showed a scan of the Borough's
     # graph in the log the page was rendering for the Village — and the log's own
     # cap counted across all of them, so a busy neighbour truncated this tenant's
     # log to whatever was left.
+    #
+    # Each tenant's run is told apart by its SUSPENSION COUNT rather than by a
+    # pass count. `passes` used to be the marker and is no longer rendered: it
+    # counted drain-loop iterations over a queue, and a cascade is a single walk,
+    # so the number is now always 0 or 1 and says nothing. "Where it stopped" is
+    # what took its place on the row, and it is a per-run number just as
+    # distinguishable.
     setup do
       ReactiveDag.Insights.forget_runs()
 
-      for {tenant, passes} <- [{"borough", 11}, {"village", 22}] do
+      for {tenant, n} <- [{"borough", 11}, {"village", 22}] do
         ReactiveDag.Insights.record(
-          %ReactiveDag.Drain.Report{passes: passes, duration_us: passes, steps: []},
+          %ReactiveDag.Report{
+            passes: 1,
+            duration_us: n,
+            steps: [],
+            suspended:
+              for i <- 1..n do
+                %{
+                  tenant: tenant,
+                  waiting: "expenses",
+                  resource: "expenses",
+                  row_uuid: "row-#{i}",
+                  reason: :expensive
+                }
+              end
+          },
           tenant: tenant
         )
       end
@@ -248,9 +269,9 @@ defmodule ReactiveDagDashboard.TenantSwitchTest do
     test "shows only the selected tenant's runs" do
       {:ok, _view, html} = live(build_conn(), "#{@multi}?tenant=village&view=log")
 
-      assert html =~ "22 passes", "the village's own run"
+      assert html =~ "22 suspended", "the village's own run"
 
-      refute html =~ "11 passes",
+      refute html =~ "11 suspended",
              "the borough's run must not appear in the village's log — one buffer " <>
                "holds both, and a log line says nothing about which graph it was"
     end
@@ -258,8 +279,8 @@ defmodule ReactiveDagDashboard.TenantSwitchTest do
     test "and the other tenant sees the other run" do
       {:ok, _view, html} = live(build_conn(), "#{@multi}?tenant=borough&view=log")
 
-      assert html =~ "11 passes"
-      refute html =~ "22 passes"
+      assert html =~ "11 suspended"
+      refute html =~ "22 suspended"
     end
 
     test "an untenanted mount still sees everything" do
@@ -269,8 +290,8 @@ defmodule ReactiveDagDashboard.TenantSwitchTest do
       # happens to hold labelled ones.
       {:ok, _view, html} = live(build_conn(), "#{@single}?view=log")
 
-      assert html =~ "11 passes"
-      assert html =~ "22 passes"
+      assert html =~ "11 suspended"
+      assert html =~ "22 suspended"
     end
   end
 end

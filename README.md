@@ -1,14 +1,15 @@
 # reactive_dag_dashboard
 
 A graph status dashboard for [reactive_dag](https://github.com/u2i/reactive_dag):
-the DAG's **structure**, each cell's **status**, and the last drain's **trace** —
-as a Phoenix LiveView you mount inside your own router pipeline.
+the DAG's **structure**, each cell's **status**, and the last cascade's **trace**
+— as a Phoenix LiveView you mount inside your own router pipeline.
 
 Answers the three questions a reactive DAG makes you ask at 2am:
 
 - **What is stale or failing?** — per-cell status rollups, with a sample of failing keys.
-- **What did the last drain actually do?** — the `%Drain.Report{}` as a waterfall: what was claimed, what changed, what triggered it, how long each step took.
+- **What did the last cascade actually do?** — the `%ReactiveDag.Report{}` as a waterfall: what was claimed, what changed, what triggered it, how long each step took.
 - **Why did *this* node recompute?** — follow `triggered_by` back up the graph.
+- **Where has work STOPPED?** — the resources a cascade reached and could not finish, because the work is too expensive to hold a transaction open for or needs a person. Unlike everything above it, this is not a record of something that happened; it is something still happening.
 
 ## Where the logic lives
 
@@ -81,11 +82,10 @@ def deps do
 end
 ```
 
-The `reactive_dag` requirement is a range over the 0.17 rc series. `~>` on a
-pre-release does resolve later pre-releases, so this tracks rc.19+ and the 0.17.0
-final without a bump here, while holding 0.18 for a deliberate one. The floor is
-rc.18 because that is where the drain step gained `op`/`depth`; the dashboard
-needs the drain telemetry that landed back in rc.6.
+The `reactive_dag` requirement tracks the 0.17 rc series. The dashboard reads
+the cascade engine's telemetry (`[:reactive_dag, :cascade, *]`) and
+`%ReactiveDag.Report{}`, both of which replaced the drain and its
+`%Drain.Report{}` — so it cannot run against a library predating that change.
 
 Mount it in your router, **inside whatever pipeline already authenticates your
 admins** — this package ships no auth of its own, by design:
@@ -102,7 +102,7 @@ end
 ```
 
 The dashboard needs to know which graph to show. `:plan` names an MFA returning
-a `%ReactiveDag.Plan{}` — usually the same call your drain uses.
+a `%ReactiveDag.Plan{}` — usually the same call your cascades use.
 
 ## Live updates
 
@@ -118,29 +118,44 @@ config :reactive_dag_dashboard, pubsub: MyApp.PubSub
 ReactiveDagDashboard.Observer.attach(MyApp.PubSub)
 ```
 
-That attaches a `:telemetry` handler to the drain's events and rebroadcasts them,
-so every open dashboard sees each drain as it happens. The header says `live`
-rather than `polling` once it is working.
+That attaches a `:telemetry` handler to the cascade's events and rebroadcasts
+them, so every open dashboard sees each cascade as it happens. The header says
+`live` rather than `polling` once it is working.
 
-**It refreshes only what moved.** A drain step names the cell it recomputed, so
+**It refreshes only what moved.** A cascade step names the cell it recomputed, so
 the page re-reads that cell rather than the graph — per-cell state is one query
 each, and re-reading forty of them per step would cost more than the work being
 observed. The poll timer stays as a fallback (slower when live), because a page
 that silently froze would be worse than a slow one.
 
-The handler runs inside the drain's process and does nothing but copy a few
-fields into a message, so watching the dashboard cannot slow the engine down. A
-broadcast failure is logged and swallowed for the same reason: an unreachable
-dashboard must not be able to fail a drain.
+The handler runs inside the cascade's process — which is inside its transaction —
+and does nothing but copy a few fields into a message, so watching the dashboard
+cannot slow the engine down or hold a connection open. A broadcast failure is
+logged and swallowed for the same reason: an unreachable dashboard must not be
+able to roll back a cascade.
 
-## Retaining the drain trace
+The observer also bridges the three **suspension** events, which have no
+counterpart under the old engine: `:suspended` when a cascade stops at a node,
+and `:resumed` / `:resumption_done` when a job picks that point back up and
+clears it. A suspension is neither a failure nor a completion, so a page told
+only about steps and stops would show a clean finish over a parked branch.
 
-`Drain.run/2` returns a `%Report{}` and most callers discard it — the drain
-deliberately persists nothing (the library reports; the host records). To see
-the trace, hand each report to `Insights.record/1`:
+## A scan and its propagation are separate
+
+Worth knowing when reading the runs log. A poll used to drain in the same job, so
+one row said "polled, then recomputed these cells". A poll now **enqueues** a
+cascade per changed leaf and returns, so `%ScanRun{}.report` is always `nil` and
+the recompute appears as its own row when its job runs. `ScanRun.drained?/1` is
+deprecated and answers `false` for anything the library builds.
+
+## Retaining the trace
+
+`Cascade.run/3` returns a `%ReactiveDag.Report{}` and most callers discard it —
+the engine deliberately persists nothing (the library reports; the host records).
+To see the trace, hand each report to `Insights.record/1`:
 
 ```elixir
-{:ok, report} = ReactiveDag.Drain.run(plan, opts)
+{:ok, report} = ReactiveDag.Cascade.run(plan, origins, opts)
 ReactiveDag.Insights.record(report)
 ```
 

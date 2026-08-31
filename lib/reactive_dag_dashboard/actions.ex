@@ -14,7 +14,6 @@ defmodule ReactiveDagDashboard.Actions do
   blocking, but correct, since the marking and draining are the same either way.
   """
 
-  require Logger
 
   @doc """
   Poll one source, optionally narrowed to a declared slice.

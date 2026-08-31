@@ -7,10 +7,10 @@ defmodule ReactiveDagDashboard.LiveUpdates do
 
   `Insights.summary/1` is one `Ash.read!` **per cell** — every row of every
   node's table, on every refresh. That is affordable on a timer at 5s and
-  unaffordable as a response to each drain step, which is precisely when you most
-  want to be live.
+  unaffordable as a response to each cascade step, which is precisely when you
+  most want to be live.
 
-  So a `:drain_step` refreshes exactly the cell it names, via
+  So a `:cascade_step` refreshes exactly the cell it names, via
   `Insights.cell_status/2`. The cost of watching becomes proportional to real
   change — the same principle the engine itself runs on, applied to observing it.
 
@@ -24,13 +24,22 @@ defmodule ReactiveDagDashboard.LiveUpdates do
 
   ## Coalescing
 
-  A drain over a wide graph emits a step per cell, and re-rendering per step
+  A cascade over a wide graph emits a step per cell, and re-rendering per step
   would be a re-render per cell. Steps are accumulated and flushed on a short
-  timer, so a 40-cell drain costs a handful of renders rather than forty.
+  timer, so a 40-cell cascade costs a handful of renders rather than forty.
+
+  ## A cascade that STOPS is not a cascade that finished
+
+  `record_suspended/4` exists because the two look identical otherwise. A
+  cascade reaching work it cannot do inline records a suspension and ends that
+  branch, then completes normally — so the page gets a clean `:cascade_done`
+  over a subtree that never ran and never will until a job or a person acts.
+  Marking the stopping point on the trail is what keeps "it finished" and "it
+  stopped here" different sentences on screen.
   """
 
   # How long a row keeps its "just ran" trail. Long enough to still be there
-  # when a wide drain finishes, short enough that the page settles on its own.
+  # when a wide cascade finishes, short enough that the page settles on its own.
   @trail_ms 12_000
 
   # How often a progress count reaches the browser. 250ms is fast enough that a
@@ -47,7 +56,7 @@ defmodule ReactiveDagDashboard.LiveUpdates do
   def interval(true), do: @live_interval_ms
   def interval(false), do: @poll_interval_ms
 
-  @doc "How long to accumulate drain steps before re-rendering."
+  @doc "How long to accumulate cascade steps before re-rendering."
   @spec flush_ms() :: pos_integer()
   def flush_ms, do: @flush_ms
 
@@ -72,27 +81,27 @@ defmodule ReactiveDagDashboard.LiveUpdates do
     |> Phoenix.Component.assign(:stale_cells, MapSet.new())
     |> Phoenix.Component.assign(:flush_scheduled?, false)
     |> Phoenix.Component.assign(:last_event_at, nil)
-    # `%{cell_id => %{changed: n, at: monotonic_ms}}` — what this drain has
+    # `%{cell_id => %{changed: n, at: monotonic_ms}}` — what this cascade has
     # touched so far. The tree renders a pulse from it, so the cascade is
     # visible AS it travels rather than only in the counts it leaves behind.
     |> Phoenix.Component.assign(:activity, %{})
     # Ticks once per step, so "which cell was most recent" is a total order even
     # when a whole cascade lands inside one millisecond. See `record_step/3`.
     |> Phoenix.Component.assign(:step_seq, 0)
-    |> Phoenix.Component.assign(:draining?, false)
+    |> Phoenix.Component.assign(:cascading?, false)
     |> Phoenix.Component.assign(:progress_at, nil)
   end
 
   @doc """
   Note that `cell_id` just recomputed, changing `changed` keys.
 
-  The drain emits a step per cell in depth order, so accumulating these IS the
+  The cascade emits a step per cell in depth order, so accumulating these IS the
   cascade: a row that has an entry has run, and the newest entry is the wave
   front. Timestamps are monotonic ms, since the only question asked of them is
   "how long ago".
 
-  `at` alone cannot answer "which was newest", though: a drain recomputes many
-  cells inside one millisecond, so the steps of a fast cascade share a timestamp
+  `at` alone cannot answer "which was newest", though: a cascade recomputes many
+  cells inside one millisecond, so the steps of a fast walk share a timestamp
   and ordering by it is a tie the map resolves arbitrarily. `seq` is a strictly
   increasing counter for exactly that — `at` is for elapsed time, `seq` is for
   order.
@@ -107,7 +116,66 @@ defmodule ReactiveDagDashboard.LiveUpdates do
     socket
     |> Phoenix.Component.assign(:activity, Map.put(socket.assigns.activity, cell_id, entry))
     |> Phoenix.Component.assign(:step_seq, seq + 1)
-    |> Phoenix.Component.assign(:draining?, true)
+    |> Phoenix.Component.assign(:cascading?, true)
+  end
+
+  @doc """
+  Note that the cascade STOPPED at `cell_id`, and why.
+
+  Distinct from every other entry on the trail, and the distinction is the whole
+  point. A `:step` says a cell ran. A `:failed` says it tried and could not. This
+  says it was never attempted inline, on purpose — the work is too expensive to
+  hold a transaction open for (`:expensive`) or needs a person (`:approval`) —
+  and that everything below it is waiting on something outside this cascade.
+
+  `count` is how many suspensions the stop recorded, and `waiting` is the
+  resource name the suspension table holds it under, which is what an operator
+  needs to find it again in `ReactiveDag.Suspension.points/1`.
+
+  It does NOT set `cascading?`: the cascade is not doing work here, it has
+  declined to. Setting it would make the page claim to be mid-run for as long as
+  the trail lasts, over a branch that has stopped.
+  """
+  @spec record_suspended(
+          Phoenix.LiveView.Socket.t(),
+          String.t(),
+          atom(),
+          non_neg_integer()
+        ) :: Phoenix.LiveView.Socket.t()
+  def record_suspended(socket, cell_id, reason, count) do
+    seq = socket.assigns.step_seq
+
+    entry = %{
+      suspended: %{reason: reason, count: count},
+      at: System.monotonic_time(:millisecond),
+      seq: seq
+    }
+
+    socket
+    # MERGED, not replaced. A cell that ran and then suspended a later change
+    # has both facts about it, and dropping the step would erase the work that
+    # did happen.
+    |> Phoenix.Component.assign(
+      :activity,
+      Map.update(socket.assigns.activity, cell_id, entry, &Map.merge(&1, entry))
+    )
+    |> Phoenix.Component.assign(:step_seq, seq + 1)
+  end
+
+  @doc """
+  A resumption cleared a stopping point: drop the `suspended` mark on `cell_id`.
+
+  Without this the mark would sit on the row until the trail expired, so a point
+  that was picked up and discharged in a second would still read as stopped —
+  which is the opposite of what happened.
+  """
+  @spec record_resumed(Phoenix.LiveView.Socket.t(), String.t()) :: Phoenix.LiveView.Socket.t()
+  def record_resumed(socket, cell_id) do
+    Phoenix.Component.assign(
+      socket,
+      :activity,
+      Map.update(socket.assigns.activity, cell_id, %{}, &Map.delete(&1, :suspended))
+    )
   end
 
   @doc """
@@ -117,7 +185,7 @@ defmodule ReactiveDagDashboard.LiveUpdates do
   recompute calls an LLM runs for minutes and reports nothing until it finishes, so
   a page told only about steps holds the last thing it heard for exactly as long as
   the slowest cell is working — after a poll, that is the poll's final phase, and a
-  working drain reads as a stall.
+  working cascade reads as a stall.
 
   Not throttled, and never superseded by a later event of its own kind: there is one
   per cell per pass, and the `:step` that follows replaces it.
@@ -131,7 +199,7 @@ defmodule ReactiveDagDashboard.LiveUpdates do
     socket
     |> Phoenix.Component.assign(:activity, Map.put(socket.assigns.activity, cell_id, entry))
     |> Phoenix.Component.assign(:step_seq, seq + 1)
-    |> Phoenix.Component.assign(:draining?, true)
+    |> Phoenix.Component.assign(:cascading?, true)
   end
 
   @doc """
@@ -166,7 +234,7 @@ defmodule ReactiveDagDashboard.LiveUpdates do
     socket
     |> Phoenix.Component.assign(:activity, Map.put(socket.assigns.activity, cell_id, entry))
     |> Phoenix.Component.assign(:step_seq, seq + 1)
-    |> Phoenix.Component.assign(:draining?, true)
+    |> Phoenix.Component.assign(:cascading?, true)
   end
 
   @doc """
@@ -174,7 +242,7 @@ defmodule ReactiveDagDashboard.LiveUpdates do
 
   The trail exists so a run is visible after the fact, and a poll that found
   nothing is the case that most needs it: it dirties nothing, so it produces no
-  `:drain_step` and would otherwise leave the page identical to one where the
+  `:cascade_step` and would otherwise leave the page identical to one where the
   button was never pressed.
 
   `state` is `:running`, `:failed`, or the poll's `%{changed:, unreachable:}` —
@@ -223,7 +291,7 @@ defmodule ReactiveDagDashboard.LiveUpdates do
 
   defp put_scan(socket, cell_id, state) do
     # `seq` here too, for the same reason `record_step/3` has one: a poll and the
-    # drain it triggers land in one `activity` map, and anything reading them in
+    # cascade it enqueues land in one `activity` map, and anything reading them in
     # order needs a total one. Without it every scan entry sorted as seq 0 and a
     # poll rendered ahead of steps that arrived before it.
     seq = socket.assigns.step_seq
@@ -238,41 +306,41 @@ defmodule ReactiveDagDashboard.LiveUpdates do
 
     socket = Phoenix.Component.assign(socket, :step_seq, seq + 1)
 
-    # A finished scan schedules the trail to expire, like a finished drain: the
+    # A finished scan schedules the trail to expire, like a finished cascade: the
     # run you just watched is the one whose result you want to read, and a no-op
-    # scan has no drain to do it for you.
+    # scan enqueues no cascade to do it for you.
     case state do
       :running ->
-        Phoenix.Component.assign(socket, :draining?, true)
+        Phoenix.Component.assign(socket, :cascading?, true)
 
       # Progress, arriving per document. No trail expiry scheduled — the poll is
       # still going, and a `{:progress, …}` is not an outcome.
       {:progress, _done, _total, _label} ->
-        Phoenix.Component.assign(socket, :draining?, true)
+        Phoenix.Component.assign(socket, :cascading?, true)
 
       _ ->
         Process.send_after(self(), :clear_trail, @trail_ms)
-        Phoenix.Component.assign(socket, :draining?, false)
+        Phoenix.Component.assign(socket, :cascading?, false)
     end
   end
 
   @doc """
-  The drain finished: stop claiming to be draining, and schedule the trail to
+  The cascade finished: stop claiming to be cascading, and schedule the trail to
   expire.
 
-  The trail outlives the drain deliberately — the run you just watched is the
+  The trail outlives the cascade deliberately — the run you just watched is the
   one you want to read the results of, and clearing it at `:stop` would erase
   the answer at the moment it became useful.
   """
   @spec finish(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   def finish(socket) do
     Process.send_after(self(), :clear_trail, @trail_ms)
-    Phoenix.Component.assign(socket, :draining?, false)
+    Phoenix.Component.assign(socket, :cascading?, false)
   end
 
-  @doc "Drop the trail. A no-op if another drain started in the meantime."
+  @doc "Drop the trail. A no-op if another cascade started in the meantime."
   @spec clear_trail(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
-  def clear_trail(%{assigns: %{draining?: true}} = socket), do: socket
+  def clear_trail(%{assigns: %{cascading?: true}} = socket), do: socket
   def clear_trail(socket) do
     socket
     |> Phoenix.Component.assign(:activity, %{})

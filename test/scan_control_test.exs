@@ -36,7 +36,34 @@ defmodule ReactiveDagDashboard.ScanControlTest do
 
     prev = Application.get_env(:reactive_dag, :repo)
     Application.put_env(:reactive_dag, :repo, ReactiveDagDashboard.FakeRepo)
-    on_exit(fn -> Application.put_env(:reactive_dag, :repo, prev) end)
+
+    # WHAT A SCAN NOW DOES, captured.
+    #
+    # A poll used to MARK a dirty frontier and a drain came along later to read
+    # it, so this file asserted on the marks a scan left behind. A poll now
+    # enqueues a cascade per changed leaf and returns — there is no queue to
+    # inspect, and the default enqueuer is Oban's, which raises outright when no
+    # Oban instance is running.
+    #
+    # `:cascade_enqueuer` is the library's own seam for a host with its own
+    # queue or a test without one. Recording the enqueue is the direct successor
+    # to reading the marks: it is the same question — "did this scan reach
+    # anything downstream" — asked of the mechanism that now answers it.
+    prev_enqueuer = Application.get_env(:reactive_dag, :cascade_enqueuer)
+    test_pid = self()
+
+    Application.put_env(:reactive_dag, :cascade_enqueuer, fn cell, keys, opts ->
+      send(test_pid, {:cascade_enqueued, cell, keys, opts})
+      {:ok, :recorded}
+    end)
+
+    on_exit(fn ->
+      Application.put_env(:reactive_dag, :repo, prev)
+
+      if prev_enqueuer,
+        do: Application.put_env(:reactive_dag, :cascade_enqueuer, prev_enqueuer),
+        else: Application.delete_env(:reactive_dag, :cascade_enqueuer)
+    end)
 
     FixtureGraph.seed()
     :ok
@@ -85,18 +112,23 @@ defmodule ReactiveDagDashboard.ScanControlTest do
   end
 
   describe "running it" do
-    test "a scan MARKS the frontier, so the change reaches downstream" do
+    test "a scan ENQUEUES a cascade, so the change reaches downstream" do
       # the bug this replaced: the page called `poll_cell/3`, which writes rows
-      # and marks nothing — so a scan from the UI changed the leaf and never
-      # recomputed anything above it
+      # and propagates nothing — so a scan from the UI changed the leaf and
+      # never recomputed anything above it.
+      #
+      # The evidence moved with the engine. It used to be a dirty mark on the
+      # frontier, which a drain would later read; it is now an enqueued cascade
+      # naming the leaf and the keys that moved. Same question — does a scan
+      # from this page reach anything downstream — and the new mechanism is
+      # strictly more informative, since the enqueue names the keys where a mark
+      # only named the cell.
       {view, _} = drawer("expenses")
 
       render_click(view, "scan", %{"cell" => "expenses", "mode" => "default"})
 
-      assert Enum.any?(ReactiveDagDashboard.FakeRepo.marks(), fn {cell, _} ->
-               cell == "expenses"
-             end),
-             "a scan that marks nothing recomputes nothing"
+      assert_received {:cascade_enqueued, "expenses", ["e1"], _opts},
+                      "a scan that enqueues no cascade recomputes nothing"
     end
 
     test "the default button polls with the leaf's declared args" do
@@ -397,8 +429,14 @@ defmodule ReactiveDagDashboard.ScanControlTest do
 
       :telemetry.attach(
         "reprocess-claims",
-        [:reactive_dag, :drain, :step],
-        fn _e, _m, meta, _ -> send(test_pid, {:claimed, meta.cell, meta.step.claimed}) end,
+        # `:cell_start`, not `:step`. What this test asks is what the recompute
+        # was CLAIMED for, and the two events carry different halves of that: a
+        # cascade puts `claimed_keys` on the event that fires BEFORE a cell runs
+        # and `changed_keys` on the one that fires after. Asking `:step` for a
+        # claim gets nil, which `assert_received` reports as a missing message
+        # rather than as the wrong question.
+        [:reactive_dag, :cascade, :cell_start],
+        fn _e, _m, meta, _ -> send(test_pid, {:claimed, meta.cell, meta.claimed_keys}) end,
         nil
       )
 
@@ -426,8 +464,14 @@ defmodule ReactiveDagDashboard.ScanControlTest do
 
       :telemetry.attach(
         "reprocess-all-claims",
-        [:reactive_dag, :drain, :step],
-        fn _e, _m, meta, _ -> send(test_pid, {:claimed, meta.cell, meta.step.claimed}) end,
+        # `:cell_start`, not `:step`. What this test asks is what the recompute
+        # was CLAIMED for, and the two events carry different halves of that: a
+        # cascade puts `claimed_keys` on the event that fires BEFORE a cell runs
+        # and `changed_keys` on the one that fires after. Asking `:step` for a
+        # claim gets nil, which `assert_received` reports as a missing message
+        # rather than as the wrong question.
+        [:reactive_dag, :cascade, :cell_start],
+        fn _e, _m, meta, _ -> send(test_pid, {:claimed, meta.cell, meta.claimed_keys}) end,
         nil
       )
 
@@ -443,13 +487,13 @@ defmodule ReactiveDagDashboard.ScanControlTest do
       test_pid = self()
 
       :telemetry.attach(
-        "reprocess-drain",
-        [:reactive_dag, :drain, :step],
+        "reprocess-cascade",
+        [:reactive_dag, :cascade, :step],
         fn _e, _m, meta, _ -> send(test_pid, {:step, meta.cell}) end,
         nil
       )
 
-      on_exit(fn -> :telemetry.detach("reprocess-drain") end)
+      on_exit(fn -> :telemetry.detach("reprocess-cascade") end)
 
       {view, _} = drawer("expenses")
 

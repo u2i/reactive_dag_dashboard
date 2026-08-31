@@ -14,7 +14,7 @@ defmodule ReactiveDagDashboard.MixProject do
       elixir: "~> 1.18",
       description:
         "Graph status dashboard for reactive_dag: the DAG's structure, per-cell " <>
-          "status, and the drain trace, as a Phoenix LiveView you mount inside " <>
+          "status, and the cascade trace, as a Phoenix LiveView you mount inside " <>
           "your own auth pipeline.",
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
@@ -52,66 +52,22 @@ defmodule ReactiveDagDashboard.MixProject do
 
   defp deps do
     [
-      # A RANGE over the rc series, not an exact pin. `~>` on a pre-release does
-      # resolve later pre-releases (Mix passes `allow_pre` for deps), so this
-      # accepts rc.19+, the 0.17.0 final and its patches, while holding 0.18 for
-      # a deliberate bump — 0.17 removed the coordination tuple, the tableless
-      # verdict node and the :on_step callback, and a major bump deserves the
-      # same scrutiny.
+      # A PATH override while the engine change lands, not a version range.
       #
-      # It was `== 0.17.0-rc.N` on the belief that `~>` could not match a
-      # pre-release at all. That is not so, and the exact pin meant a PR here per
-      # library release even when nothing in this dashboard cared.
-      # rc.40 for `Insights` retaining whole RUNS rather than the bare drain
-      # report inside them. The log reads `run.duration_us` (the poll, which is
-      # usually most of a scan's wall time — a two-minute crawl used to log as
-      # its drain's few ms), `run.unreachable` (a scan that could not LOOK must
-      # never render as one that found nothing) and `ScanRun.total/2` (cost
-      # across both phases). Against rc.39 the buffer holds a bare `%Report{}`,
-      # so `recent/1`'s entries have no `:run` key at all and the log cannot be
-      # built — a hard break rather than a silently missing feature.
+      # The long list of rc floors that used to sit here — each naming the
+      # release that added a field this page reads — is gone with the engine
+      # those releases built. `ReactiveDag.Drain` and `ReactiveDag.Frontier` no
+      # longer exist, the telemetry root moved from `[:reactive_dag, :drain, *]`
+      # to `[:reactive_dag, :cascade, *]`, and `Drain.Report` became
+      # `ReactiveDag.Report`. There is no version of the published library this
+      # dashboard now runs against, so a floor would be a floor under nothing.
       #
-      # rc.39 for `compare:` — the columns a node counts as its RESULT. The node
-      # drawer reads `cell.meta[:compare]`, which an older library never stamps,
-      # so the section would render "every column" for a node that declares a
-      # narrower list. That is the wrong answer, not a missing one: it is the
-      # explanation for a `changed` count, so a reader would be told the cascade
-      # fired on columns it does not actually watch.
-      #
-      # rc.42 for `%Plan{tenant:}` — the tenant switch reads it off the plan
-      # rather than keeping its own copy, so the switch and the graph on screen
-      # cannot disagree. An older library has no such field.
-      #
-      # rc.51 for `Insights.recent/2`'s `tenant:` — the runs log shows THIS
-      # graph's runs. Against an older library the option is unknown, so the log
-      # would mix every tenant's runs into whichever graph is on screen and count
-      # `@log_runs` across all of them.
-      #
-      # rc.57 for `[:reactive_dag, :drain, :cell_start]` and `Op.progress/3` — what
-      # the DRAIN is doing. `:step` fires only when a cell has finished, so against
-      # an older library the page holds the poll's last label through the whole
-      # drain, and an LLM cell running for minutes is invisible.
-      #
-      # rc.56 for a PHASE — `Source.progress/3` with `done`/`total` nil and the
-      # label alone. A crawl's counter stops at `n/n` when FETCHING ends and the
-      # writes that follow are the slowest part, so without this the page holds a
-      # frozen number through them and a working poll reads as hung. Against an
-      # older library the spec forbids the nil, so a scanner cannot report one.
-      #
-      # rc.35 for `[:reactive_dag, :drain, :cell_failed]` — a cell that failed
-      # WITHOUT failing the drain. An older library never emits it, so a
-      # contained failure would show as a clean drain over a stale cell.
-      #
-      # Earlier floors, each for the same reason — an older library emits the
-      # event without the field, so the feature silently never appears:
-      #
-      #   rc.31 — `detail` on `:scan, :stop`, which the scan outcome line reads
-      #           to say what a poll COST.
-      #   rc.29 — `Report.by/2`, for the log's per-model token line.
-      #   rc.27 — `Source.progress/3`; against rc.26 the fixture scanner could
-      #           not emit it, so the tests passed on hand-fired telemetry
-      #           while the real path went untested.
-      {:reactive_dag, "~> 0.17.0-rc.57"},
+      # Restore a `~>` requirement once a version carrying the cascade engine is
+      # published, with ONE floor: the release that renamed the telemetry root.
+      # Everything else this page needs shipped before it, and a dashboard built
+      # for the drain cannot partially work against a cascade — it hears no
+      # events at all.
+      {:reactive_dag, path: "../reactive_dag", override: true},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

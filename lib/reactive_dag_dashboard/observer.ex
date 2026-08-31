@@ -2,42 +2,63 @@ defmodule ReactiveDagDashboard.Observer do
   @moduledoc """
   Turns the engine's telemetry into LiveView messages.
 
-  The drain emits `:telemetry` events (`reactive_dag` v0.17+); LiveViews need
-  process messages. This is the bridge: one `:telemetry` handler per node,
-  broadcasting over `Phoenix.PubSub` so any number of open dashboards hear the
-  same drain.
+  The cascade emits `:telemetry` events under `[:reactive_dag, :cascade, *]`;
+  LiveViews need process messages. This is the bridge: one `:telemetry` handler
+  per node, broadcasting over `Phoenix.PubSub` so any number of open dashboards
+  hear the same cascade.
 
   ## Why a bridge and not a direct subscribe
 
-  A telemetry handler runs **inside the drain's own process**. Doing anything
-  slow there — a query, a render — puts dashboard latency on the critical path
-  of the engine, which is exactly backwards. So the handler does the least
-  possible work: copy a few fields into a message and hand it to PubSub. Every
-  read happens later, in the LiveView's process, where it can be slow without
-  costing the drain anything.
+  A telemetry handler runs **inside the cascade's own process** — and a cascade
+  runs in a transaction, so that process is holding a database connection while
+  this code executes. Doing anything slow there — a query, a render — puts
+  dashboard latency on the critical path of the engine, which is exactly
+  backwards. So the handler does the least possible work: copy a few fields into
+  a message and hand it to PubSub. Every read happens later, in the LiveView's
+  process, where it can be slow without costing the cascade anything.
 
   ## What is broadcast
 
       {:cell_running, cell_id, claimed}      a cell BEGAN recomputing
       {:cell_progress, cell_id, done, total, label} a recompute advanced
-      {:drain_step, cell_id, changed_keys}   after each cell recomputes
-      {:drain_done, report}                  when the drain finishes
-      {:drain_failed, reason}                when it raised
+      {:cascade_step, cell_id, changed_keys} after each cell recomputes
+      {:cascade_done, report}                when the cascade finishes
+      {:cascade_failed, reason}              when it raised
+      {:cell_failed, cell_id, reason}        one cell failed; the cascade went on
+      {:suspended, cell_id, waiting, reason, count}    the cascade STOPPED here
+      {:resumed, cell_id, waiting, suspensions}        a job picked that point up
+      {:resumption_done, cell_id, waiting, discharged} and cleared it
       {:scan_started, cell_id}               a poll began
       {:scan_progress, cell_id, done, total, label} a poll advanced
-      {:cell_failed, cell_id, reason}        one cell failed; the drain went on
       {:scan_done, cell_id, result}          a poll finished, changed or not
       {:scan_failed, cell_id, reason}        it raised
 
-  `:scan_done` carries a `ReactiveDag.ScanRun` — the poll and the drain it
-  triggered — because a scan that changed NOTHING is a real outcome and the page
-  has to be able to say so. Without it the only evidence a queued scan ran was a
-  `:drain_step`, which a no-op poll never produces.
+  `:scan_done` carries a `ReactiveDag.ScanRun`, because a scan that changed
+  NOTHING is a real outcome and the page has to be able to say so.
 
-  `:drain_step` names the cell and its changed keys, which is what lets a view
+  A poll no longer propagates in its own job, though: it ENQUEUES a cascade per
+  changed leaf and returns. So `run.report` is always nil, and the recompute
+  arrives SEPARATELY as `:cascade_*` messages from whichever job ran it — the
+  page can no longer treat a scan's completion as the end of the work it caused.
+
+  `:cascade_step` names the cell and its changed keys, which is what lets a view
   refresh **only that cell** rather than re-reading the graph. That distinction
   is the whole reason to be told at all: a notification that means "something,
   somewhere, changed" costs the same full re-read that polling did.
+
+  ## The three suspension events
+
+  These have no counterpart under the old engine, and they are the ones worth
+  watching. A cascade is a single walk that runs until it reaches work it cannot
+  do inline — too expensive to hold a transaction open for, or needing a person
+  — and then STOPS.
+
+  `:suspended` is that stop. It is neither a failure nor a completion, which is
+  exactly why it needs a message of its own: a page told only about steps and
+  stops sees a cascade that ended cleanly, with no hint that a branch of it is
+  parked until something else happens. `:resumed` and `:resumption_done` are the
+  other half — a job picking that point back up, and clearing it. A `:suspended`
+  with no matching `:resumption_done` is the shape of work nobody is clearing.
 
   ## Attaching
 
@@ -52,29 +73,42 @@ defmodule ReactiveDagDashboard.Observer do
   require Logger
 
   @handler "reactive-dag-dashboard-observer"
+  # The topic keeps its name across the engine change. It is a string hosts put
+  # in their own `subscribe/2` calls, so renaming it would break every such host
+  # for a cosmetic gain — and the topic was never about the drain specifically,
+  # only about "this library's propagation events".
   @topic "reactive_dag:drain"
 
   @events [
-    [:reactive_dag, :drain, :step],
+    [:reactive_dag, :cascade, :step],
     # BEFORE a cell recomputes. `:step` fires when it FINISHES, so the slowest cell
     # in a graph — an LLM extraction running for minutes — is invisible for exactly
     # as long as it is the one working. The page then holds whatever it last heard,
-    # which after a poll is that poll's final phase, and a working drain reads as a
-    # hang.
-    [:reactive_dag, :drain, :cell_start],
+    # which after a poll is that poll's final phase, and a working cascade reads as
+    # a hang.
+    [:reactive_dag, :cascade, :cell_start],
     # From inside ONE recompute. `:cell_start` names the slow cell; this says how far
     # through it is — "meeting_events · 12/34 meetings" rather than four minutes of
     # "recomputing".
-    [:reactive_dag, :drain, :progress],
-    [:reactive_dag, :drain, :stop],
-    [:reactive_dag, :drain, :exception],
-    [:reactive_dag, :drain, :cell_failed],
-    # A cell that failed WITHOUT failing the drain. Neither a `:step` (it never
-    # recomputed) nor an `:exception` (the drain finished), so without this a
+    [:reactive_dag, :cascade, :progress],
+    [:reactive_dag, :cascade, :stop],
+    [:reactive_dag, :cascade, :exception],
+    [:reactive_dag, :cascade, :cell_failed],
+    # A cell that failed WITHOUT failing the cascade. Neither a `:step` (it never
+    # recomputed) nor an `:exception` (the cascade finished), so without this a
     # contained failure produces no event at all and the page shows a clean
-    # drain over a cell that silently stayed dirty.
-    # The SCAN half. A poll that finds nothing dirties nothing, so it emits no
-    # `:drain, :step` at all — and a page told only about steps cannot tell a
+    # cascade over a cell that silently did not run.
+    #
+    # WHERE THE CASCADE STOPPED. New with the cascade engine, and the events
+    # that carry what nothing else does: a suspension ends a branch without
+    # failing anything, so a page watching only `:step`/`:stop` sees a clean
+    # finish over work that has been parked. `:resumed`/`:resumption_done` are
+    # the other end — the job that picks the point back up and clears it.
+    [:reactive_dag, :cascade, :suspended],
+    [:reactive_dag, :cascade, :resumed],
+    [:reactive_dag, :cascade, :resumption_done],
+    # The SCAN half. A poll that finds nothing enqueues nothing, so it produces no
+    # `:cascade, :step` at all — and a page told only about steps cannot tell a
     # scan that found nothing from a scan that never ran. Both looked like the
     # button doing nothing, which is how a working scan reads as broken.
     [:reactive_dag, :scan, :start],
@@ -86,7 +120,7 @@ defmodule ReactiveDagDashboard.Observer do
     [:reactive_dag, :scan, :progress]
   ]
 
-  @doc "The PubSub topic drain events are broadcast on."
+  @doc "The PubSub topic cascade and scan events are broadcast on."
   @spec topic() :: String.t()
   def topic, do: @topic
 
@@ -116,30 +150,73 @@ defmodule ReactiveDagDashboard.Observer do
   @doc "Whether the handler is currently attached — what the UI reads to say 'live'."
   @spec attached?() :: boolean()
   def attached? do
-    Enum.any?(:telemetry.list_handlers([:reactive_dag, :drain, :stop]), &(&1.id == @handler))
+    Enum.any?(:telemetry.list_handlers([:reactive_dag, :cascade, :stop]), &(&1.id == @handler))
   end
 
   @doc false
-  # Runs in the DRAIN's process. Keep it trivial: no queries, no rendering, and
-  # never let a broadcast failure propagate — a dashboard that cannot be reached
-  # must not fail the drain that was only informing it.
-  def handle([:reactive_dag, :drain, :step], _measurements, metadata, %{pubsub: pubsub}) do
-    broadcast(pubsub, {:drain_step, metadata.cell, metadata.changed_keys})
+  # Runs in the CASCADE's process, which is inside its transaction. Keep it
+  # trivial: no queries, no rendering, and never let a broadcast failure
+  # propagate — a dashboard that cannot be reached must not roll back the
+  # cascade that was only informing it.
+  def handle([:reactive_dag, :cascade, :step], _measurements, metadata, %{pubsub: pubsub}) do
+    broadcast(pubsub, {:cascade_step, metadata.cell, metadata.changed_keys})
   end
 
-  def handle([:reactive_dag, :drain, :stop], _measurements, metadata, %{pubsub: pubsub}) do
-    broadcast(pubsub, {:drain_done, metadata.report})
+  def handle([:reactive_dag, :cascade, :stop], _measurements, metadata, %{pubsub: pubsub}) do
+    broadcast(pubsub, {:cascade_done, metadata.report})
   end
 
-  def handle([:reactive_dag, :drain, :exception], _measurements, metadata, %{pubsub: pubsub}) do
-    broadcast(pubsub, {:drain_failed, metadata.reason})
+  def handle([:reactive_dag, :cascade, :exception], _measurements, metadata, %{pubsub: pubsub}) do
+    broadcast(pubsub, {:cascade_failed, metadata.reason})
   end
 
-  # ONE cell, not the drain. Its keys are still dirty and the next drain retries
-  # them, so this is "this cell did not run", not "the drain broke" — a page
-  # that conflated the two would either understate a broken source or overstate
-  # a transient one.
-  def handle([:reactive_dag, :drain, :cell_failed], _measurements, metadata, %{pubsub: pubsub}) do
+  # THE CASCADE STOPPED HERE. Not a failure — the branch reached work that
+  # cannot be done inline (`:expensive`) or needs a person (`:approval`), and
+  # everything else carried on and committed.
+  #
+  # `waiting` is the RESOURCE name the suspension was recorded under, which is
+  # what `Insights.pending/1` and `Suspension.points/1` also key on; `cell` is
+  # the graph's own id for the same node. Both travel because the page knows
+  # cells and the suspension table knows resources, and joining them anywhere
+  # else would need a lookup this handler must not do.
+  def handle([:reactive_dag, :cascade, :suspended], measurements, metadata, %{pubsub: pubsub}) do
+    broadcast(
+      pubsub,
+      {:suspended, metadata[:cell], metadata[:waiting], metadata[:reason],
+       measurements[:count] || 0}
+    )
+  end
+
+  # A resumption job picked a stopping point back up. `suspensions` is how many
+  # had piled up there — the count that climbs when nothing is clearing a point.
+  def handle([:reactive_dag, :cascade, :resumed], measurements, metadata, %{pubsub: pubsub}) do
+    broadcast(
+      pubsub,
+      {:resumed, metadata[:cell], metadata[:waiting], measurements[:suspensions] || 0}
+    )
+  end
+
+  # …and cleared it. `discharged` is how many suspensions the job actually
+  # removed, which is not necessarily how many it found: one written DURING the
+  # resumption is deliberately left behind for the next pass.
+  def handle([:reactive_dag, :cascade, :resumption_done], measurements, metadata, %{
+        pubsub: pubsub
+      }) do
+    broadcast(
+      pubsub,
+      {:resumption_done, metadata[:cell], metadata[:waiting], measurements[:discharged] || 0}
+    )
+  end
+
+  # ONE cell, not the cascade. Its savepoint rolled back and the branch below it
+  # stopped, but everything else carried on and committed — so this is "this cell
+  # did not run", not "the cascade broke". A page conflating the two would either
+  # understate a broken source or overstate a transient one.
+  #
+  # Note what recovery now means: there is no dirty queue holding the work, so
+  # nothing retries this automatically. The change comes back when its source
+  # observes it again.
+  def handle([:reactive_dag, :cascade, :cell_failed], _measurements, metadata, %{pubsub: pubsub}) do
     broadcast(pubsub, {:cell_failed, metadata.cell, metadata.reason})
   end
 
@@ -154,8 +231,9 @@ defmodule ReactiveDagDashboard.Observer do
   #
   # `detail` is what the SCANNER reported about its own work. It matters for a
   # crawler that calls a model — classifying each new document, say — because
-  # that spend appears in no drain step: a poll and a drain are separate phases,
-  # so this event is the only place it can reach a live page.
+  # that spend appears in no cascade step: the poll and the propagation it
+  # enqueues are separate jobs now, so this event is the only place it can reach
+  # a live page.
   def handle([:reactive_dag, :scan, :stop], measurements, metadata, %{pubsub: pubsub}) do
     broadcast(pubsub, {:scan_done, metadata.cell, scan_run(measurements, metadata)})
   end
@@ -168,15 +246,15 @@ defmodule ReactiveDagDashboard.Observer do
   # batching would push an arbitrary N into every scanner. Coalescing is THIS
   # side's job: the LiveView already flushes on a 150ms timer, so those 700
   # become a handful of renders.
-  # A cell BEGAN. The counterpart to `:drain, :step`, and the event that lets a page
-  # name the cell that is running rather than the last one that finished.
-  def handle([:reactive_dag, :drain, :cell_start], measurements, metadata, %{pubsub: pubsub}) do
+  # A cell BEGAN. The counterpart to `:cascade, :step`, and the event that lets a
+  # page name the cell that is running rather than the last one that finished.
+  def handle([:reactive_dag, :cascade, :cell_start], measurements, metadata, %{pubsub: pubsub}) do
     broadcast(pubsub, {:cell_running, metadata[:cell], measurements[:claimed]})
   end
 
   # An op emits this per unit of work, so it arrives many times in one recompute.
   # Coalescing is THIS side's job, same as `:scan, :progress`.
-  def handle([:reactive_dag, :drain, :progress], measurements, metadata, %{pubsub: pubsub}) do
+  def handle([:reactive_dag, :cascade, :progress], measurements, metadata, %{pubsub: pubsub}) do
     broadcast(
       pubsub,
       {:cell_progress, metadata[:cell], measurements.done, measurements[:total],
@@ -225,6 +303,10 @@ defmodule ReactiveDagDashboard.Observer do
         |> Map.get(:detail, %{})
         |> Map.put_new(:changed_count, Map.get(measurements, :changed, 0)),
       unreachable: Map.get(metadata, :unreachable, []),
+      # Nil for anything the library produces: a scan enqueues a cascade rather
+      # than running one, so there is no report to attach. Kept because a host
+      # MAY populate it — a wrapper running a cascade synchronously — and a
+      # renderer downstream already has to nil-guard it either way.
       report: Map.get(metadata, :report)
     }
   end

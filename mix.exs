@@ -52,22 +52,19 @@ defmodule ReactiveDagDashboard.MixProject do
 
   defp deps do
     [
-      # A PATH override while the engine change lands, not a version range.
+      # ONE floor: rc.59, the release that replaced the drain with a cascade.
       #
       # The long list of rc floors that used to sit here — each naming the
       # release that added a field this page reads — is gone with the engine
       # those releases built. `ReactiveDag.Drain` and `ReactiveDag.Frontier` no
       # longer exist, the telemetry root moved from `[:reactive_dag, :drain, *]`
       # to `[:reactive_dag, :cascade, *]`, and `Drain.Report` became
-      # `ReactiveDag.Report`. There is no version of the published library this
-      # dashboard now runs against, so a floor would be a floor under nothing.
+      # `ReactiveDag.Report`.
       #
-      # Restore a `~>` requirement once a version carrying the cascade engine is
-      # published, with ONE floor: the release that renamed the telemetry root.
-      # Everything else this page needs shipped before it, and a dashboard built
-      # for the drain cannot partially work against a cascade — it hears no
-      # events at all.
-      {:reactive_dag, path: "../reactive_dag", override: true},
+      # Everything else this page needs shipped before rc.59, and a dashboard
+      # built for the drain cannot PARTIALLY work against a cascade — it hears
+      # no events at all — so one floor says everything a list of them would.
+      {:reactive_dag, "~> 0.17.0-rc.59", override: true},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

@@ -29,11 +29,17 @@ defmodule ReactiveDagDashboard.Tree do
 
   ## Cycles
 
-  A `ReactiveDag.Plan` is acyclic by construction — `Graph.build/1` computes
-  depths, which a cycle makes impossible. This module does not trust that:
+  A plan MAY contain a cycle, and as of `reactive_dag` 0.17.0-rc.61 it can do so
+  deliberately: a node may declare `feedback :other`, a back-edge that
+  propagates but is excluded from scheduling order. The motivating case is a
+  meeting whose minutes announce future meetings — real in the graph, never real
+  in time.
+
+  This module already did the right thing when a cycle was assumed impossible:
   it carries the current path and refuses to descend into a cell already on it,
-  marking the node `cyclic?`. A dashboard whose job is to explain a graph must
-  not hang on a malformed one; better to render the cycle visibly.
+  marking the node `cyclic?`. That defence is now load-bearing rather than
+  belt-and-braces. A dashboard whose job is to explain a graph must not hang on
+  one; better to render the cycle visibly.
 
   ## Shape
 

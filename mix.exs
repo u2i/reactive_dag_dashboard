@@ -64,7 +64,7 @@ defmodule ReactiveDagDashboard.MixProject do
       # Everything else this page needs shipped before rc.59, and a dashboard
       # built for the drain cannot PARTIALLY work against a cascade — it hears
       # no events at all — so one floor says everything a list of them would.
-      {:reactive_dag, "~> 0.17.0-rc.59", override: true},
+      {:reactive_dag, "~> 0.17.0-rc.61", override: true},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

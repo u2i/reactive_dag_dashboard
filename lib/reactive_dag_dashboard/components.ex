@@ -442,18 +442,28 @@ defmodule ReactiveDagDashboard.Components do
                         color: #cdb6fb }
       .rdd-grain-one { background: #222a36; color: var(--faint) }
 
-      /* The link to a hoisted cell's own graph. Reads as an ACTION — it moves
-         you down the page — where the grain badges beside it are labels, so it
-         gets the accent and a pointer rather than the muted fill. */
-      .rdd-grain-link {
-        background: #1d2b3a; color: #7fb0e8; text-decoration: none;
-        border: 1px solid #2c4560; cursor: pointer;
+      /* A CROSS-REFERENCE, not a node. No border, no fill, no operator line —
+         it must not read as a box, because a box is a cell drawn here and this
+         cell is drawn somewhere else. Indented to sit under its parent like a
+         child would, so the structure still reads. */
+      .rdd-ref { display: flex; align-items: baseline; padding: 1px 0 1px var(--indent) }
+      .rdd-ref-link {
+        display: inline-flex; align-items: baseline; gap: 6px;
+        text-decoration: none; color: var(--dim); font-size: 12px;
+        padding: 1px 6px; border-radius: 4px;
       }
-      .rdd-grain-link:hover { background: #24384c; color: #a8cbf0; }
+      .rdd-ref-link:hover { background: var(--panel2); color: var(--ink) }
+      .rdd-ref-link code { font-family: ui-monospace, monospace; color: #7fb0e8 }
+      .rdd-ref-link:hover code { color: #a8cbf0 }
+      .rdd-ref-arrow { color: var(--faint) }
+      .rdd-ref-note { font-size: 10.5px; color: var(--faint) }
 
-      /* Where a chevron would be. A hoisted node has no children HERE, so the
-         slot says "look down" instead of offering to expand nothing. */
-      .rdd-chev-link { color: #7fb0e8; cursor: default; }
+      /* The route count, on the graph that draws the cell. Same vocabulary as
+         the `× N routes` badge it replaces, so the fact reads the same. */
+      .rdd-shared-routes {
+        font-size: 10.5px; font-weight: 600; color: var(--faint);
+        margin-left: 6px; font-family: ui-monospace, monospace;
+      }
 
       /* A stacked graph: one per shared cell, below the main tree. The rule and
          the space are what make it read as a separate graph rather than a
@@ -692,6 +702,31 @@ defmodule ReactiveDagDashboard.Components do
   attr(:details, :map, required: true)
   attr(:activity, :map, default: %{})
 
+  # A REFERENCE, not a node. A hoisted cell is drawn in full exactly once, in
+  # its own graph; here we only need to say which cell the route arrives at and
+  # where to read it.
+  #
+  # Rendering the full box was worse than the duplication it replaced: the
+  # operator signature — `SearchDocuments( meeting_shell, meeting, … )` — is
+  # nine inputs wide, so a row that says nothing new was the widest thing on
+  # the page, and the `see graph ↓` link read as an extra badge on a real node
+  # rather than as a pointer instead of one.
+  #
+  # One line, the cell's name, an arrow. It reads as a cross-reference because
+  # it looks nothing like the boxes around it.
+  defp tree_node(%{node: %{hoisted?: true}} = assigns) do
+    ~H"""
+    <div class="rdd-ref">
+      <span class="rdd-lead"></span>
+      <a href={"#graph-#{@node.id}"} class="rdd-ref-link" title="drawn in full below">
+        <span class="rdd-ref-arrow">↳</span>
+        <code><%= @node.id %></code>
+        <span class="rdd-ref-note">see graph ↓</span>
+      </a>
+    </div>
+    """
+  end
+
   defp tree_node(assigns) do
     ~H"""
     <%!-- `path` is unique per NODE POSITION; `id` is not. A hoisted cell has one
@@ -712,18 +747,14 @@ defmodule ReactiveDagDashboard.Components do
         <span class="rdd-lead"></span>
 
         <span
-          :if={@node.children > 0 and not @node.hoisted?}
+          :if={@node.children > 0}
           id={"chev-#{@node.path}"}
           class={["rdd-chev", not @node.closed? && "rotate-90"]}
           phx-click={toggle_kids(@node)}
         >
           ▸
         </span>
-        <%!-- A hoisted node has no children HERE — they are drawn in that
-              cell's own graph below — so it must not offer a chevron that
-              expands nothing. The arrow points down the page, at the anchor. --%>
-        <span :if={@node.hoisted?} class="rdd-chev rdd-chev-link">↓</span>
-        <span :if={@node.children == 0 and not @node.hoisted?} class="rdd-chev rdd-chev-none"></span>
+        <span :if={@node.children == 0} class="rdd-chev rdd-chev-none"></span>
 
         <div class="rdd-body">
           <div class="rdd-kind">
@@ -778,20 +809,8 @@ defmodule ReactiveDagDashboard.Components do
               × <%= @node.routes %> routes
             </span>
 
-            <%!-- The LINK, in the box. `also here` told you a node was drawn
-                  elsewhere without saying where, so you scanned the page for a
-                  second copy. This jumps to the graph that expands it. --%>
-            <a
-              :if={@node.hoisted?}
-              href={"#graph-#{@node.id}"}
-              class="rdd-grain rdd-grain-link"
-              title="this cell is expanded in its own graph below"
-            >
-              see graph ↓
-            </a>
-
             <span
-              :if={@node.repeat? and not @node.hoisted?}
+              :if={@node.repeat?}
               class="rdd-grain rdd-grain-one"
               title="expanded under its other input"
             >

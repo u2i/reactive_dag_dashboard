@@ -987,7 +987,17 @@ defmodule ReactiveDagDashboard.DagLive do
           class="rdd-shared-graph"
         >
           <div class="rdd-shared-head">
-            <h3><code><%= g.id %></code></h3>
+            <h3>
+              <code><%= g.id %></code>
+              <%!-- The route count belongs HERE now. It used to sit on the node
+                    box as `× N routes`, and the compact reference that replaced
+                    that box has no room for it — but it is the answer to "what
+                    does a change cost", so it moves to the one place the cell is
+                    drawn in full rather than being dropped. --%>
+              <span :if={length(g.referenced_by) > 1} class="rdd-shared-routes">
+                × <%= length(g.referenced_by) %> routes
+              </span>
+            </h3>
             <%!-- The backlink. A link that goes one way leaves you scrolling
                   to find who wanted this. --%>
             <p class="rdd-shared-refs">

@@ -744,10 +744,14 @@ defmodule ReactiveDagDashboard.DagLiveTest do
              "a hoisted cell should carry a link, not an unaddressed marker"
     end
 
-    test "a hoisted row offers no chevron — it has nothing to expand here" do
+    test "a reference is not a node — no box, no operator line" do
       {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
 
-      assert html =~ "rdd-chev-link"
+      # The reference replaces the whole node box. Rendering the box was worse
+      # than the duplication it replaced: `SearchDocuments( … )` is nine inputs
+      # wide, so a row saying nothing new was the widest thing on the page.
+      assert html =~ "rdd-ref-link"
+      refute html =~ "rdd-chev-link"
     end
   end
 

@@ -1020,12 +1020,17 @@ defmodule ReactiveDagDashboard.Components do
         id={"kids-#{@node.path}"}
         class={["rdd-children", @node.closed? && "hidden"]}
       >
+        <%!-- `base_path` HAS to travel down. Without it every child fell back
+              to the "/" default, so a row link read `/cell/topic_zip/rows`
+              instead of `/admin/dag/cell/topic_zip/rows` — a 404 for every
+              node except the root, which was the only one that ever had it. --%>
         <.tree_node
         :for={kid <- @node.kids}
         node={kid}
         status={@status}
         details={@details}
         activity={@activity}
+        base_path={@base_path}
       />
       </div>
     </div>

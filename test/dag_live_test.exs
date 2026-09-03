@@ -773,6 +773,24 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       assert html =~ "/rows?status="
     end
 
+    test "a CHILD's link carries the mount point too" do
+      # The bug this pins: `base_path` was not passed down the recursion, so
+      # every node except the root fell back to the "/" default and produced
+      # `/cell/topic_zip/rows` instead of `/ops/dag/cell/topic_zip/rows` — a
+      # 404 on every row link an operator would actually click, since the root
+      # is the one node they are already looking at.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
+
+      links = Regex.scan(~r|href="([^"]*?/rows\?status=[^"]*)"|, html) |> Enum.map(&List.last/1)
+
+      assert links != [], "expected at least one row link"
+
+      for href <- links do
+        assert String.starts_with?(href, @path),
+               "row link #{href} is missing the mount point #{@path}"
+      end
+    end
+
     test "a count with nothing behind it is not a link" do
       # `?` (unreadable) and `—` (rows kept elsewhere) would offer a page that
       # cannot answer.

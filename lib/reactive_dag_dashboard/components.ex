@@ -460,6 +460,47 @@ defmodule ReactiveDagDashboard.Components do
 
       /* The route count, on the graph that draws the cell. Same vocabulary as
          the `× N routes` badge it replaces, so the fact reads the same. */
+      /* ── the rows behind a count ─────────────────────────────────────
+         A table, not a tree: this is the one place the dashboard shows DATA
+         rather than structure, so it looks like a register and not like the
+         node boxes above it. */
+      .rdd-rows { max-width: 1080px }
+      .rdd-rows-head { display: flex; align-items: baseline;
+                       justify-content: space-between; gap: 12px;
+                       margin-bottom: 6px }
+      .rdd-rows-head h2 { margin: 0; font-size: 15px; font-weight: 650;
+                          font-family: ui-monospace, monospace }
+      .rdd-rows-head code { color: var(--ink) }
+      .rdd-rows-status { font-size: 11px; font-weight: 600; color: var(--faint);
+                         margin-left: 8px; text-transform: uppercase;
+                         letter-spacing: .06em }
+      .rdd-rows-back { font-size: 12px; color: #7fb0e8; text-decoration: none }
+      .rdd-rows-back:hover { text-decoration: underline }
+      .rdd-rows-note { margin: 0 0 10px; font-size: 12px; color: var(--dim) }
+
+      .rdd-rows-table { width: 100%; border-collapse: collapse; font-size: 12px;
+                        font-variant-numeric: tabular-nums }
+      .rdd-rows-table th { text-align: left; font-size: 9px; font-weight: 700;
+                           letter-spacing: .07em; text-transform: uppercase;
+                           color: var(--faint); padding: 5px 8px;
+                           border-bottom: 1px solid var(--border);
+                           font-family: ui-monospace, monospace }
+      .rdd-rows-table td { padding: 5px 8px; border-bottom: 1px solid #1f2732;
+                           vertical-align: top }
+      .rdd-rows-key { font-family: ui-monospace, monospace; color: var(--ink);
+                      white-space: nowrap }
+      /* The record can be long and is the least structured thing here, so it
+         gets the remaining width and wraps rather than forcing a scrollbar. */
+      .rdd-rows-record { font-family: ui-monospace, monospace; font-size: 11px;
+                         color: var(--dim); word-break: break-word }
+      .rdd-rows-pager { display: flex; gap: 8px; margin-top: 12px }
+
+      /* A badge that is a link. Same pill, plus the affordance — the count was
+         already the most legible thing on the row, so it should not change
+         shape to become clickable. */
+      .rdd-badge-link { text-decoration: none; cursor: pointer }
+      .rdd-badge-link:hover { filter: brightness(1.35) }
+
       .rdd-shared-routes {
         font-size: 10.5px; font-weight: 600; color: var(--faint);
         margin-left: 6px; font-family: ui-monospace, monospace;
@@ -649,6 +690,9 @@ defmodule ReactiveDagDashboard.Components do
   attr(:status, :map, required: true)
   attr(:details, :map, required: true)
   attr(:activity, :map, default: %{})
+  # Where the dashboard is mounted, so a row link composes against it rather
+  # than assuming "/".
+  attr(:base_path, :string, default: "/")
 
   @doc """
   The hierarchy: what a change reaches, as an EXPRESSION.
@@ -689,10 +733,18 @@ defmodule ReactiveDagDashboard.Components do
   wrapper by id rather than a prefix selector over every descendant, which is
   what nesting buys.
   """
+
   def hierarchy(assigns) do
+
     ~H"""
     <div class="rdd-tree">
-      <.tree_node node={@node} status={@status} details={@details} activity={@activity} />
+      <.tree_node
+        node={@node}
+        status={@status}
+        details={@details}
+        activity={@activity}
+        base_path={@base_path}
+      />
     </div>
     """
   end
@@ -701,6 +753,10 @@ defmodule ReactiveDagDashboard.Components do
   attr(:status, :map, required: true)
   attr(:details, :map, required: true)
   attr(:activity, :map, default: %{})
+  # Where the dashboard is mounted, so a row link composes against it rather
+  # than assuming "/". Declared here because the attrs apply to the whole
+  # function, not to the clause they sit above.
+  attr(:base_path, :string, default: "/")
 
   # A REFERENCE, not a node. A hoisted cell is drawn in full exactly once, in
   # its own graph; here we only need to say which cell the route arrives at and
@@ -817,12 +873,18 @@ defmodule ReactiveDagDashboard.Components do
               also here
             </span>
 
-            <span
+            <%!-- The count is a QUESTION — "what are those 727 rows?" — and it
+                  was unanswerable without leaving the page. Now it links to
+                  them. A real route rather than a drawer: a row list is a thing
+                  you send someone, and ten thousand rows want a page. --%>
+            <.link
               :for={{status, n} <- statuses(@status[@node.id])}
-              class={["rdd-badge", status_badge(status)]}
+              navigate={rows_path(@base_path, @node.id, status)}
+              class={["rdd-badge", "rdd-badge-link", status_badge(status)]}
+              title={"show the #{n} #{status || "unset"} rows"}
             >
               <%= status %> <%= n %>
-            </span>
+            </.link>
 
             <%!-- ONE pill, opening a menu. It was a strip — scan, full, and a
                   button per slice value — which fits the fixture and breaks on
@@ -2036,6 +2098,14 @@ defmodule ReactiveDagDashboard.Components do
   # Only two, deliberately. The library does not know a host's status words —
   # `tombstoned`, `failing` and `thin` are all just "not present" here — so
   # inventing a colour per value would be inventing a meaning per value.
+  # `<base>cell/<id>/rows?status=<s>`. A nil status is a real value — rows with
+  # no status column, or none set — so it travels as an explicit marker rather
+  # than an absent param, which would mean "every status".
+  defp rows_path(base, id, status) do
+    base = String.replace_suffix(base || "/", "/", "")
+    "#{base}/cell/#{id}/rows?status=#{status || "__nil__"}"
+  end
+
   defp status_badge("present"), do: "rdd-b-ok"
   defp status_badge(_other), do: "rdd-b-warn"
 

@@ -98,6 +98,13 @@ defmodule ReactiveDagDashboard.Router do
           # see what it reached, then back to read what it held.
           live("/", ReactiveDagDashboard.DagLive, :index, as: route_name)
           live("/cell/:cell_id", ReactiveDagDashboard.DagLive, :cell, as: route_name)
+
+          # The ROWS behind a status count. Same LiveView — the page already
+          # holds the plan, the tenant and the status counts, and a separate
+          # view would rebuild all three to show a list. A real route rather
+          # than a drawer because a row list is a thing you link someone to,
+          # and because 10,000 rows want a page.
+          live("/cell/:cell_id/rows", ReactiveDagDashboard.DagLive, :rows, as: route_name)
         end
       end
     end

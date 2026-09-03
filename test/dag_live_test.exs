@@ -755,4 +755,53 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     end
   end
 
+  describe "the rows behind a count" do
+    # A status badge was a dead end: `present 727` stated a number and gave you
+    # no way to see what it counted. It is now a link to those rows.
+
+    test "the badge links to its status's rows" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
+
+      assert html =~ "/cell/", "the count should be a link"
+      assert html =~ "rdd-badge-link"
+      assert html =~ "/rows?status="
+    end
+
+    test "the rows route lists what the cell holds" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=present")
+
+      assert html =~ "rdd-rows"
+      # The TOTAL is the point — a page saying only "50 rows" cannot tell you
+      # whether you have seen everything.
+      assert html =~ "showing" or html =~ "No rows in this status"
+    end
+
+    test "a nil status is a real status, not an absent one" do
+      # A node with no status column, or none set. It travels as `__nil__`
+      # rather than an absent param, which would mean "every status".
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      assert html =~ "unset"
+    end
+
+    test "the rows view replaces the tree rather than sitting beside it" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=present")
+
+      # Asserting on `rdd-tree` does NOT work: the stylesheet ships inline on
+      # every page, so the class name is in the HTML whether or not a tree
+      # renders. My first version of this test matched CSS and failed for that
+      # reason rather than for the reason it claimed.
+      #
+      # A rendered node carries `id="node-…"`, which only markup produces.
+      refute html =~ ~s(id="node-),
+             "the row list is its own destination — the tree would be noise beside it"
+    end
+
+    test "there is a way back to the graph" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=present")
+
+      assert html =~ "back to the graph"
+    end
+  end
+
 end

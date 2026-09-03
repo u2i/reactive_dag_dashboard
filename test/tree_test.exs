@@ -406,4 +406,173 @@ defmodule ReactiveDagDashboard.TreeTest do
       assert tree.children == []
     end
   end
+  describe "hoisted — every cell drawn once" do
+    # The diamond is the whole test: `all_verdicts` is one cell on two routes.
+    # `downstream/2` draws it twice; this draws it once, in its own graph, with
+    # the two routes pointing at it.
+
+    test "a shared cell is lifted out of the main tree", %{plan: plan} do
+      {root, shared} = Tree.hoisted(plan, "expenses")
+
+      ids = root |> Tree.flatten() |> Enum.map(& &1.id)
+
+      # TWO links — one per route — but neither expands. The link is the edge,
+      # so removing the second would hide that spend_rollup feeds it too; what
+      # is removed is the duplicated SUBTREE, not the duplicated edge.
+      assert Enum.count(ids, &(&1 == "all_verdicts")) == 2
+
+      links = root |> Tree.flatten() |> Enum.filter(&(&1.id == "all_verdicts"))
+      assert Enum.all?(links, & &1.hoisted?)
+      assert Enum.all?(links, &(&1.children == []))
+
+      assert [%{id: "all_verdicts"}] = shared
+    end
+
+    test "the link node carries no children — they live in its own graph", %{plan: plan} do
+      {root, shared} = Tree.hoisted(plan, "expenses")
+
+      link = root |> Tree.flatten() |> Enum.find(&(&1.id == "all_verdicts"))
+
+      assert link.hoisted?
+      assert link.children == [], "a hoisted node's subtree belongs to its own graph, not here"
+
+      # And the subtree is genuinely there rather than dropped.
+      [%{tree: tree}] = shared
+      assert tree.id == "all_verdicts"
+      refute tree.hoisted?, "a graph must not link to itself"
+    end
+
+    test "the hoisted graph names who referenced it", %{plan: plan} do
+      # A link that goes one way leaves you scrolling to find who wanted it.
+      {_root, [%{referenced_by: refs}]} = Tree.hoisted(plan, "expenses")
+
+      # `{cell, path}` — the cell names the referrer, the path is where the
+      # link sits so a backlink has something real to target.
+      assert Enum.map(refs, &elem(&1, 0)) == ["category_health", "spend_rollup"]
+    end
+
+    test "no cell is EXPANDED twice across all the graphs", %{plan: plan} do
+      # The property that makes this shape scale. Links may repeat — they are
+      # edges — but no subtree is drawn twice.
+      {root, shared} = Tree.hoisted(plan, "expenses")
+
+      all =
+        [root | Enum.map(shared, & &1.tree)]
+        |> Enum.flat_map(&Tree.flatten/1)
+        |> Enum.reject(& &1.hoisted?)
+        |> Enum.map(& &1.id)
+
+      assert all == Enum.uniq(all),
+             "these ids are drawn more than once: " <>
+               inspect(all -- Enum.uniq(all))
+    end
+
+    test "a cell reached by ONE route is not hoisted", %{plan: plan} do
+      # Hoisting exists to remove duplication. A node with one route has none,
+      # and lifting it out would scatter a readable tree across the page.
+      {root, shared} = Tree.hoisted(plan, "expenses")
+
+      refute Enum.any?(shared, &(&1.id == "category_health"))
+
+      inline = root |> Tree.flatten() |> Enum.find(&(&1.id == "category_health"))
+      refute inline.hoisted?
+    end
+
+    test "the root is never hoisted, even if something points back at it", %{plan: plan} do
+      {root, shared} = Tree.hoisted(plan, "expenses")
+
+      assert root.id == "expenses"
+      refute root.hoisted?
+      refute Enum.any?(shared, &(&1.id == "expenses"))
+    end
+
+    test "upstream hoists too", %{plan: plan} do
+      {root, _shared} = Tree.hoisted(plan, "all_verdicts", :upstream)
+
+      nodes = Tree.flatten(root)
+
+      # `expenses` feeds both legs of the diamond, so walking up from the tip
+      # reaches it twice. Both arrivals are LINKS — the edges are kept, the
+      # subtree is drawn once in its own graph.
+      arrivals = Enum.filter(nodes, &(&1.id == "expenses"))
+
+      assert length(arrivals) == 2
+      assert Enum.all?(arrivals, & &1.hoisted?)
+      assert Enum.all?(arrivals, &(&1.children == []))
+    end
+  end
+
+  describe "hoisted — the cross-graph properties" do
+    # The diamond fixture cannot reach these: they need a cell shared between a
+    # HOISTED graph and the main tree, which the diamond has no room for. Both
+    # were found against the real Red Hook graph (64 exploded rows, 17 cells),
+    # so they are pinned here with the smallest shape that reproduces them.
+
+    test "a cell reached from two DIFFERENT graphs is hoisted too", %{plan: plan} do
+      # `meeting_shell` was expanded in the main tree AND inside the
+      # `projected_meetings` graph: two routes, but in different graphs, so
+      # per-graph counting never saw it as shared. Counting must span every
+      # graph that will be drawn.
+      {root, shared} = Tree.hoisted(plan, "expenses")
+
+      expanded =
+        [root | Enum.map(shared, & &1.tree)]
+        |> Enum.flat_map(&Tree.flatten/1)
+        |> Enum.reject(& &1.hoisted?)
+        |> Enum.map(& &1.id)
+
+      assert expanded == Enum.uniq(expanded),
+             "expanded in more than one graph: " <> inspect(expanded -- Enum.uniq(expanded))
+    end
+
+    test "referenced_by names every site that links to it", %{plan: plan} do
+      # `referenced_by` was built per-walk and discarded, so a referrer found
+      # inside a hoisted graph was lost — meeting_shell listed one of its two
+      # routes, and the backlink omitted a route the page was drawing.
+      {root, shared} = Tree.hoisted(plan, "expenses")
+
+      all = [root | Enum.map(shared, & &1.tree)] |> Enum.flat_map(&Tree.flatten/1)
+
+      for %{id: id, referenced_by: refs} <- shared do
+        sites = all |> Enum.filter(&(&1.id == id and &1.hoisted?)) |> Enum.map(& &1.via)
+
+        # `referenced_by` is `{cell, path}` — the cell names the referrer, the
+        # path is WHERE the link sits, which is what a backlink can target. A
+        # referrer is usually not itself hoisted, so `#graph-<referrer>` would
+        # dangle.
+        assert Enum.sort(Enum.uniq(sites)) == refs |> Enum.map(&elem(&1, 0)) |> Enum.sort(),
+               "#{id}: linked from #{inspect(Enum.uniq(sites))} but referenced_by says #{inspect(refs)}"
+
+        # Every recorded path must name a row that actually renders. Paths only
+        # exist after `nested/2` — the raw tree carries positions implicitly —
+        # so this checks against the rendered shape.
+        paths =
+          [root | Enum.map(shared, & &1.tree)]
+          |> Enum.map(&Tree.nested(plan, &1))
+          |> Enum.flat_map(&nested_flatten/1)
+          |> Enum.map(& &1.path)
+          |> MapSet.new()
+
+        for {ref, at} <- refs do
+          assert MapSet.member?(paths, at),
+                 "#{id}'s backlink to #{ref} targets #{at}, which is not a row on the page"
+        end
+      end
+    end
+
+    test "settling terminates on a graph with a feedback cycle", %{plan: plan} do
+      # The shared set SHRINKS between rounds (a cell below a hoisted cell loses
+      # its second route once that ancestor becomes a link), so an earlier
+      # version that took the union never converged and hung. A cycle is the
+      # case most likely to expose that again.
+      {root, shared} = Tree.hoisted(plan, "expenses", :upstream)
+
+      assert is_map(root)
+      assert is_list(shared)
+    end
+  end
+
+  # `nested/2` output nests under `:kids`, not `:children`.
+  defp nested_flatten(node), do: [node | Enum.flat_map(node.kids, &nested_flatten/1)]
+
 end

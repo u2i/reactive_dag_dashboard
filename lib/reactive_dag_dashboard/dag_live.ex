@@ -58,6 +58,10 @@ defmodule ReactiveDagDashboard.DagLive do
      |> LiveUpdates.setup()}
   end
 
+  # 50: enough to answer "what is in here" in one screen, small enough that the
+  # LiveView diff stays cheap on a cell holding ten thousand rows.
+  @rows_per_page 50
+
   @impl true
   def handle_params(params, uri, socket) do
     dir = direction(params)
@@ -74,7 +78,106 @@ defmodule ReactiveDagDashboard.DagLive do
      # this direction and waits — picking one is the first act, rather than the
      # page guessing a root and rendering a tree nobody asked for.
      |> assign(:root, params["cell_id"])
-     |> assign_view()}
+     |> assign(:rows_status, params["status"])
+     |> assign(:rows_status_label, status_label(params["status"]))
+     |> assign(:rows_per_page, @rows_per_page)
+     |> assign(:rows_offset, offset(params))
+     |> assign_view()
+     |> assign_rows(socket.assigns.live_action)}
+  end
+
+  # The rows behind a status count, loaded only on the route that shows them —
+  # the tree does not need them, and a cell can hold ten thousand.
+  #
+  # `nil` is a REAL status (a node with no status column, or none set), so it
+  # travels as `__nil__` rather than an absent param, which would mean "every
+  # status".
+  defp assign_rows(socket, :rows) do
+    %{plan: plan, root: id, rows_status: status, rows_offset: offset} = socket.assigns
+
+    case plan.cells[id] do
+      nil ->
+        assign(socket, :rows, %{rows: [], total: 0})
+
+      cell ->
+        wanted = if status in [nil, "__nil__"], do: [nil], else: [status]
+
+        page =
+          safe_page(cell, wanted,
+            limit: @rows_per_page,
+            offset: offset,
+            tenant: plan.tenant
+          )
+
+        assign(socket, :rows, page)
+    end
+  end
+
+  defp assign_rows(socket, _other), do: assign(socket, :rows, %{rows: [], total: 0})
+
+  # A display path. A node whose resource is unreadable here — a policy, an
+  # unmigrated table — must degrade to "cannot read" rather than crashing the
+  # page that exists to explain the graph.
+  defp safe_page(cell, statuses, opts) do
+    ReactiveDag.Node.Rows.page_by_status(cell, statuses, opts)
+  rescue
+    _ -> %{rows: [], total: 0, unreadable?: true}
+  end
+
+  # `<base>cell/<id>` — back to the graph the row list came from.
+  defp cell_path(base, id) do
+    base = String.replace_suffix(base || "/", "/", "")
+    "#{base}/cell/#{id}"
+  end
+
+  defp rows_page_path(base, id, status, offset) do
+    base = String.replace_suffix(base || "/", "/", "")
+    "#{base}/cell/#{id}/rows?status=#{status || "__nil__"}&offset=#{offset}"
+  end
+
+  # "showing 1–50 of 727". The TOTAL is the point: a page that says only
+  # "50 rows" cannot tell you whether you have seen everything.
+  defp showing(%{total: 0}, _offset, _per), do: "No rows in this status."
+
+  defp showing(%{rows: rows, total: total}, offset, _per) do
+    first = offset + 1
+    last = offset + length(rows)
+    "showing #{first}–#{last} of #{total}"
+  end
+
+  # One line per row, from whatever the record actually has. Which columns
+  # matter is a question about the HOST's schema and this library cannot answer
+  # it, so it shows the non-structural fields and lets the reader decide.
+  #
+  # Truncated per field rather than overall: a row whose first column is a
+  # 4KB blob would otherwise push every other column off the line.
+  defp record_summary(record) when is_struct(record) do
+    record
+    |> Map.from_struct()
+    |> Enum.reject(fn {k, v} ->
+      k in [:__meta__, :__metadata__, :id, :inserted_at, :updated_at] or is_nil(v)
+    end)
+    |> Enum.sort_by(&elem(&1, 0))
+    |> Enum.take(6)
+    |> Enum.map_join("  ", fn {k, v} -> "#{k}=#{truncate(v)}" end)
+  end
+
+  defp record_summary(_), do: ""
+
+  defp truncate(v) do
+    v |> inspect(limit: 3, printable_limit: 60) |> String.slice(0, 60)
+  end
+
+  # `nil` is a real status, not an absent one — a node with no status column, or
+  # none set — so it reads as "unset" rather than as blank.
+  defp status_label(s) when s in [nil, "__nil__"], do: "unset"
+  defp status_label(s), do: s
+
+  defp offset(params) do
+    case Integer.parse(params["offset"] || "0") do
+      {n, _} when n >= 0 -> n
+      _ -> 0
+    end
   end
 
   # ── the two things this page DOES ───────────────────────────────────────────
@@ -643,6 +746,7 @@ defmodule ReactiveDagDashboard.DagLive do
     |> assign(:starts, Tree.starting_points(socket.assigns.plan, socket.assigns.direction))
     |> assign(:details, %{})
     |> assign(:node, nil)
+    |> assign(:shared_graphs, [])
     |> assign(:routes, 0)
     |> assign(:bands, [])
     |> assign(:dead_end?, false)
@@ -650,6 +754,12 @@ defmodule ReactiveDagDashboard.DagLive do
 
   defp assign_view(%{assigns: %{plan: plan, root: id, direction: dir}} = socket) do
     tree = tree_for(plan, id, dir)
+
+    # `tree` (exploded) still drives `details_for/3`, `path_count/1` and
+    # `levels/2`: those answer "what does a change COST", where a cell reached
+    # by three routes really is three recomputes. `hoisted/3` answers "what is
+    # the SHAPE", where drawing it three times is just noise.
+    {hoisted_root, shared} = Tree.hoisted(plan, id, dir)
 
     socket
     # The starting points depend on direction, so they are assigned here where
@@ -661,7 +771,15 @@ defmodule ReactiveDagDashboard.DagLive do
     |> assign(:details, details_for(plan, tree, socket.assigns.controls))
     # NESTED, not flattened: the markup recurses so containment is real
     # structure rather than a computed margin. See Components.hierarchy/1.
-    |> assign(:node, Tree.nested(plan, tree))
+    |> assign(:node, Tree.nested(plan, hoisted_root))
+    # One graph per shared cell, stacked below the main one. The exploded tree
+    # drew a converging cell under every route that reaches it — 64 rows for 17
+    # cells on a real graph, with one node drawn 18 times. Each cell is now
+    # expanded once, and the routes to it are links.
+    |> assign(
+      :shared_graphs,
+      Enum.map(shared, &%{&1 | tree: Tree.nested(plan, &1.tree, "g#{&1.id}")})
+    )
     |> assign(:routes, Tree.path_count(tree))
     # The diagram's scope, from the same tree the expression uses. Whole-plan
     # levels drew every cell at once, which at real graph sizes is a tangle no
@@ -959,8 +1077,116 @@ defmodule ReactiveDagDashboard.DagLive do
         </p>
       </div>
 
-      <div :if={@root && @view == :tree && @node && not @dead_end?}>
-        <.hierarchy node={@node} status={@status} details={@details} activity={@activity} />
+      <%!-- THE ROWS behind a status count. Its own route, so it is linkable and
+            so ten thousand rows get a page rather than a drawer — but the same
+            LiveView, because the plan, the tenant and the counts are already
+            here and a separate view would rebuild all three to show a list. --%>
+      <section :if={@live_action == :rows} class="rdd-rows">
+        <div class="rdd-rows-head">
+          <h2>
+            <code><%= @root %></code>
+            <span class="rdd-rows-status"><%= @rows_status_label %></span>
+          </h2>
+          <.link navigate={cell_path(@base_path, @root)} class="rdd-rows-back">
+            ← back to the graph
+          </.link>
+        </div>
+
+        <p :if={@rows[:unreadable?]} class="rdd-rows-note">
+          Could not read this node's rows. A policy, an unmigrated table, or a
+          tenanted resource read without a tenant — the graph above is still
+          correct.
+        </p>
+
+        <p :if={!@rows[:unreadable?]} class="rdd-rows-note">
+          <%= showing(@rows, @rows_offset, @rows_per_page) %>
+        </p>
+
+        <table :if={@rows.rows != []} class="rdd-rows-table">
+          <thead>
+            <tr>
+              <th>key</th>
+              <th>status</th>
+              <th>row</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr :for={r <- @rows.rows}>
+              <td class="rdd-rows-key"><%= r.key %></td>
+              <td><%= r.status || "—" %></td>
+              <%!-- The record, not a chosen subset. Which columns matter is a
+                    question about the HOST's schema, and this library cannot
+                    know the answer — so it shows what is there and lets the
+                    reader decide. --%>
+              <td class="rdd-rows-record"><%= record_summary(r.record) %></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div :if={@rows.total > @rows_per_page} class="rdd-rows-pager">
+          <.link
+            :if={@rows_offset > 0}
+            navigate={rows_page_path(@base_path, @root, @rows_status, @rows_offset - @rows_per_page)}
+            class="rdd-mini"
+          >
+            ← previous
+          </.link>
+          <.link
+            :if={@rows_offset + @rows_per_page < @rows.total}
+            navigate={rows_page_path(@base_path, @root, @rows_status, @rows_offset + @rows_per_page)}
+            class="rdd-mini"
+          >
+            next →
+          </.link>
+        </div>
+      </section>
+
+      <div :if={@live_action != :rows && @root && @view == :tree && @node && not @dead_end?}>
+        <.hierarchy
+          node={@node}
+          status={@status}
+          details={@details}
+          activity={@activity}
+          base_path={@base_path}
+        />
+
+        <%!-- One graph per shared cell, stacked. A cell reached by several
+              routes is drawn ONCE, here, and every route to it carries a link
+              down to this anchor. The alternative — expanding it under each
+              route — put 64 rows on the page for 17 cells. --%>
+        <section
+          :for={g <- @shared_graphs}
+          id={"graph-#{g.id}"}
+          class="rdd-shared-graph"
+        >
+          <div class="rdd-shared-head">
+            <h3>
+              <code><%= g.id %></code>
+              <%!-- The route count belongs HERE now. It used to sit on the node
+                    box as `× N routes`, and the compact reference that replaced
+                    that box has no room for it — but it is the answer to "what
+                    does a change cost", so it moves to the one place the cell is
+                    drawn in full rather than being dropped. --%>
+              <span :if={length(g.referenced_by) > 1} class="rdd-shared-routes">
+                × <%= length(g.referenced_by) %> routes
+              </span>
+            </h3>
+            <%!-- The backlink. A link that goes one way leaves you scrolling
+                  to find who wanted this. --%>
+            <p class="rdd-shared-refs">
+              reached from
+              <%= for {{ref, at}, i} <- Enum.with_index(g.referenced_by) do %><%= if i > 0, do: ", " %><a href={"#node-#{at}"}><code><%= ref %></code></a><% end %>
+            </p>
+          </div>
+
+          <.hierarchy
+            node={g.tree}
+            status={@status}
+            details={@details}
+            activity={@activity}
+            base_path={@base_path}
+          />
+        </section>
       </div>
     </main>
     """

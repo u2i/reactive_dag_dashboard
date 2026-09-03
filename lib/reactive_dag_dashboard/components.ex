@@ -442,6 +442,96 @@ defmodule ReactiveDagDashboard.Components do
                         color: #cdb6fb }
       .rdd-grain-one { background: #222a36; color: var(--faint) }
 
+      /* A CROSS-REFERENCE, not a node. No border, no fill, no operator line —
+         it must not read as a box, because a box is a cell drawn here and this
+         cell is drawn somewhere else. Indented to sit under its parent like a
+         child would, so the structure still reads. */
+      .rdd-ref { display: flex; align-items: baseline; padding: 1px 0 1px var(--indent) }
+      .rdd-ref-link {
+        display: inline-flex; align-items: baseline; gap: 6px;
+        text-decoration: none; color: var(--dim); font-size: 12px;
+        padding: 1px 6px; border-radius: 4px;
+      }
+      .rdd-ref-link:hover { background: var(--panel2); color: var(--ink) }
+      .rdd-ref-link code { font-family: ui-monospace, monospace; color: #7fb0e8 }
+      .rdd-ref-link:hover code { color: #a8cbf0 }
+      .rdd-ref-arrow { color: var(--faint) }
+      .rdd-ref-note { font-size: 10.5px; color: var(--faint) }
+
+      /* The route count, on the graph that draws the cell. Same vocabulary as
+         the `× N routes` badge it replaces, so the fact reads the same. */
+      /* ── the rows behind a count ─────────────────────────────────────
+         A table, not a tree: this is the one place the dashboard shows DATA
+         rather than structure, so it looks like a register and not like the
+         node boxes above it. */
+      .rdd-rows { max-width: 1080px }
+      .rdd-rows-head { display: flex; align-items: baseline;
+                       justify-content: space-between; gap: 12px;
+                       margin-bottom: 6px }
+      .rdd-rows-head h2 { margin: 0; font-size: 15px; font-weight: 650;
+                          font-family: ui-monospace, monospace }
+      .rdd-rows-head code { color: var(--ink) }
+      .rdd-rows-status { font-size: 11px; font-weight: 600; color: var(--faint);
+                         margin-left: 8px; text-transform: uppercase;
+                         letter-spacing: .06em }
+      .rdd-rows-back { font-size: 12px; color: #7fb0e8; text-decoration: none }
+      .rdd-rows-back:hover { text-decoration: underline }
+      .rdd-rows-note { margin: 0 0 10px; font-size: 12px; color: var(--dim) }
+
+      .rdd-rows-table { width: 100%; border-collapse: collapse; font-size: 12px;
+                        font-variant-numeric: tabular-nums }
+      .rdd-rows-table th { text-align: left; font-size: 9px; font-weight: 700;
+                           letter-spacing: .07em; text-transform: uppercase;
+                           color: var(--faint); padding: 5px 8px;
+                           border-bottom: 1px solid var(--border);
+                           font-family: ui-monospace, monospace }
+      .rdd-rows-table td { padding: 5px 8px; border-bottom: 1px solid #1f2732;
+                           vertical-align: top }
+      .rdd-rows-key { font-family: ui-monospace, monospace; color: var(--ink);
+                      white-space: nowrap }
+      /* The record can be long and is the least structured thing here, so it
+         gets the remaining width and wraps rather than forcing a scrollbar. */
+      .rdd-rows-record { font-family: ui-monospace, monospace; font-size: 11px;
+                         color: var(--dim); word-break: break-word }
+      .rdd-rows-pager { display: flex; gap: 8px; margin-top: 12px }
+
+      /* A badge that is a link. Same pill, plus the affordance — the count was
+         already the most legible thing on the row, so it should not change
+         shape to become clickable. */
+      /* The count, as a link. Same size and weight — it is the number the eye
+         already lands on, and changing its shape to say "clickable" would cost
+         the scanability that makes it useful. */
+      .rdd-count-link { text-decoration: none; cursor: pointer }
+      .rdd-count-link:hover { color: var(--accent); text-decoration: underline }
+
+      .rdd-badge-link { text-decoration: none; cursor: pointer }
+      .rdd-badge-link:hover { filter: brightness(1.35) }
+
+      .rdd-shared-routes {
+        font-size: 10.5px; font-weight: 600; color: var(--faint);
+        margin-left: 6px; font-family: ui-monospace, monospace;
+      }
+
+      /* A stacked graph: one per shared cell, below the main tree. The rule and
+         the space are what make it read as a separate graph rather than a
+         continuation of the one above. */
+      .rdd-shared-graph {
+        margin-top: 1.75rem; padding-top: 1rem;
+        border-top: 1px solid #2a3442;
+        scroll-margin-top: 1rem;
+      }
+      .rdd-shared-head { margin-bottom: .5rem; }
+      .rdd-shared-head h3 { margin: 0; font-size: .9rem; font-weight: 600; }
+      .rdd-shared-head code { color: #cfe0f5; }
+      .rdd-shared-refs {
+        margin: .15rem 0 0; font-size: .75rem; color: var(--faint);
+      }
+      .rdd-shared-refs a { color: #7fb0e8; text-decoration: none; }
+      .rdd-shared-refs a:hover { text-decoration: underline; }
+
+      /* Anchor targets sit under a sticky header on a scrolled page. */
+      .rdd-node { scroll-margin-top: 1rem; }
+
       .rdd-name { font-size: 13.5px; font-weight: 600; margin-top: 1px }
       .rdd-name button { font: inherit; background: none; border: 0; padding: 0;
                          cursor: pointer; text-align: left; color: #cdd6df }
@@ -606,6 +696,9 @@ defmodule ReactiveDagDashboard.Components do
   attr(:status, :map, required: true)
   attr(:details, :map, required: true)
   attr(:activity, :map, default: %{})
+  # Where the dashboard is mounted, so a row link composes against it rather
+  # than assuming "/".
+  attr(:base_path, :string, default: "/")
 
   @doc """
   The hierarchy: what a change reaches, as an EXPRESSION.
@@ -646,10 +739,18 @@ defmodule ReactiveDagDashboard.Components do
   wrapper by id rather than a prefix selector over every descendant, which is
   what nesting buys.
   """
+
   def hierarchy(assigns) do
+
     ~H"""
     <div class="rdd-tree">
-      <.tree_node node={@node} status={@status} details={@details} activity={@activity} />
+      <.tree_node
+        node={@node}
+        status={@status}
+        details={@details}
+        activity={@activity}
+        base_path={@base_path}
+      />
     </div>
     """
   end
@@ -658,10 +759,47 @@ defmodule ReactiveDagDashboard.Components do
   attr(:status, :map, required: true)
   attr(:details, :map, required: true)
   attr(:activity, :map, default: %{})
+  # Where the dashboard is mounted, so a row link composes against it rather
+  # than assuming "/". Declared here because the attrs apply to the whole
+  # function, not to the clause they sit above.
+  attr(:base_path, :string, default: "/")
+
+  # A REFERENCE, not a node. A hoisted cell is drawn in full exactly once, in
+  # its own graph; here we only need to say which cell the route arrives at and
+  # where to read it.
+  #
+  # Rendering the full box was worse than the duplication it replaced: the
+  # operator signature — `SearchDocuments( meeting_shell, meeting, … )` — is
+  # nine inputs wide, so a row that says nothing new was the widest thing on
+  # the page, and the `see graph ↓` link read as an extra badge on a real node
+  # rather than as a pointer instead of one.
+  #
+  # One line, the cell's name, an arrow. It reads as a cross-reference because
+  # it looks nothing like the boxes around it.
+  defp tree_node(%{node: %{hoisted?: true}} = assigns) do
+    ~H"""
+    <div class="rdd-ref">
+      <span class="rdd-lead"></span>
+      <a href={"#graph-#{@node.id}"} class="rdd-ref-link" title="drawn in full below">
+        <span class="rdd-ref-arrow">↳</span>
+        <code><%= @node.id %></code>
+        <span class="rdd-ref-note">see graph ↓</span>
+      </a>
+    </div>
+    """
+  end
 
   defp tree_node(assigns) do
     ~H"""
-    <div class={[
+    <%!-- `path` is unique per NODE POSITION; `id` is not. A hoisted cell has one
+          link site per route, so keying the anchor on the cell id put the same
+          DOM id on several rows and LiveView refused to render.
+
+          The anchor a backlink targets is on the stacked graph's <section>
+          instead, which exists exactly once per shared cell. --%>
+    <div
+      id={"node-#{@node.path}"}
+      class={[
       "rdd-node",
       kind_class(@node),
       @node.routes > 1 && "rdd-many",
@@ -733,16 +871,26 @@ defmodule ReactiveDagDashboard.Components do
               × <%= @node.routes %> routes
             </span>
 
-            <span :if={@node.repeat?} class="rdd-grain rdd-grain-one" title="expanded under its other input">
+            <span
+              :if={@node.repeat?}
+              class="rdd-grain rdd-grain-one"
+              title="expanded under its other input"
+            >
               also here
             </span>
 
-            <span
+            <%!-- The count is a QUESTION — "what are those 727 rows?" — and it
+                  was unanswerable without leaving the page. Now it links to
+                  them. A real route rather than a drawer: a row list is a thing
+                  you send someone, and ten thousand rows want a page. --%>
+            <.link
               :for={{status, n} <- statuses(@status[@node.id])}
-              class={["rdd-badge", status_badge(status)]}
+              navigate={rows_path(@base_path, @node.id, status)}
+              class={["rdd-badge", "rdd-badge-link", status_badge(status)]}
+              title={"show the #{n} #{status || "unset"} rows"}
             >
               <%= status %> <%= n %>
-            </span>
+            </.link>
 
             <%!-- ONE pill, opening a menu. It was a strip — scan, full, and a
                   button per slice value — which fits the fixture and breaks on
@@ -833,7 +981,32 @@ defmodule ReactiveDagDashboard.Components do
           </div>
         </div>
 
-        <span class="rdd-count" title={count_title(@status[@node.id])}>
+        <%!-- THE COUNT IS THE LINK. It is the number on the row — every cell
+              in a real graph reports `%{nil => n}`, so the per-status badges
+              never render and linking those linked nothing anyone could see.
+              This is what an operator is looking at when they want the rows.
+
+              Not a link when there is nothing to show: an unreadable node
+              (`?`) or a node that keeps its rows elsewhere (`—`) would offer a
+              page that cannot answer.
+
+              The `title` stays EXACTLY the count's explanation — it answers
+              "why is this number what it is", which a link's own affordance
+              does not replace, and a test pins it. --%>
+        <.link
+          :if={countable?(@status[@node.id])}
+          navigate={rows_path(@base_path, @node.id, nil)}
+          class="rdd-count rdd-count-link"
+          title={count_title(@status[@node.id])}
+        >
+          <%= key_count(@status[@node.id]) %>
+        </.link>
+
+        <span
+          :if={not countable?(@status[@node.id])}
+          class="rdd-count"
+          title={count_title(@status[@node.id])}
+        >
           <%= key_count(@status[@node.id]) %>
         </span>
       </div>
@@ -847,12 +1020,17 @@ defmodule ReactiveDagDashboard.Components do
         id={"kids-#{@node.path}"}
         class={["rdd-children", @node.closed? && "hidden"]}
       >
+        <%!-- `base_path` HAS to travel down. Without it every child fell back
+              to the "/" default, so a row link read `/cell/topic_zip/rows`
+              instead of `/admin/dag/cell/topic_zip/rows` — a 404 for every
+              node except the root, which was the only one that ever had it. --%>
         <.tree_node
         :for={kid <- @node.kids}
         node={kid}
         status={@status}
         details={@details}
         activity={@activity}
+        base_path={@base_path}
       />
       </div>
     </div>
@@ -1956,6 +2134,14 @@ defmodule ReactiveDagDashboard.Components do
   # Only two, deliberately. The library does not know a host's status words —
   # `tombstoned`, `failing` and `thin` are all just "not present" here — so
   # inventing a colour per value would be inventing a meaning per value.
+  # `<base>cell/<id>/rows?status=<s>`. A nil status is a real value — rows with
+  # no status column, or none set — so it travels as an explicit marker rather
+  # than an absent param, which would mean "every status".
+  defp rows_path(base, id, status) do
+    base = String.replace_suffix(base || "/", "/", "")
+    "#{base}/cell/#{id}/rows?status=#{status || "__nil__"}"
+  end
+
   defp status_badge("present"), do: "rdd-b-ok"
   defp status_badge(_other), do: "rdd-b-warn"
 
@@ -1970,6 +2156,15 @@ defmodule ReactiveDagDashboard.Components do
 
   defp count_title(%{key_count: 0}), do: "no rows"
   defp count_title(%{key_count: n}), do: "#{n} keys"
+
+  # A count worth clicking: a real number of rows this node holds HERE. `nil`
+  # (never read), `:unreadable` and `:elsewhere` all render a placeholder, and
+  # a link on a placeholder offers a page that cannot answer.
+  defp countable?(nil), do: false
+  defp countable?(%{rows: :unreadable}), do: false
+  defp countable?(%{rows: :elsewhere}), do: false
+  defp countable?(%{key_count: n}) when is_integer(n) and n > 0, do: true
+  defp countable?(_), do: false
 
   defp key_count(nil), do: "?"
   defp key_count(%{rows: :unreadable}), do: "?"

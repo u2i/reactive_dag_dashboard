@@ -708,4 +708,132 @@ defmodule ReactiveDagDashboard.DagLiveTest do
   defp count(html, needle) do
     html |> String.split(needle) |> length() |> Kernel.-(1)
   end
+  describe "stacked graphs — the rendered markup" do
+    # The structural tests in `tree_test.exs` prove the SHAPE. These prove the
+    # page draws it: the link, the anchor it targets, and the backlink.
+
+    test "a shared cell links to its own graph instead of expanding twice" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
+
+      # `all_verdicts` is the diamond's convergence. It should appear as a LINK
+      # under each route...
+      assert html =~ "see graph ↓"
+      assert html =~ ~s(href="#graph-all_verdicts")
+
+      # ...and exactly once as a section that expands it.
+      assert html |> String.split(~s(id="graph-all_verdicts")) |> length() == 2,
+             "a shared cell must have exactly one anchor section"
+    end
+
+    test "the stacked graph says who reached it" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
+
+      assert html =~ "reached from"
+
+      # Both routes through the diamond, named — a link that goes one way
+      # leaves you scrolling to find who wanted it.
+      assert html =~ "category_health"
+      assert html =~ "spend_rollup"
+    end
+
+    test "`also here` is gone where a graph replaces it" do
+      # The old marker said a node was drawn elsewhere without saying where.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
+
+      refute html =~ "also here",
+             "a hoisted cell should carry a link, not an unaddressed marker"
+    end
+
+    test "a reference is not a node — no box, no operator line" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
+
+      # The reference replaces the whole node box. Rendering the box was worse
+      # than the duplication it replaced: `SearchDocuments( … )` is nine inputs
+      # wide, so a row saying nothing new was the widest thing on the page.
+      assert html =~ "rdd-ref-link"
+      refute html =~ "rdd-chev-link"
+    end
+  end
+
+  describe "the rows behind a count" do
+    # A status badge was a dead end: `present 727` stated a number and gave you
+    # no way to see what it counted. It is now a link to those rows.
+
+    test "the KEY COUNT is the link" do
+      # Not the per-status badges. Every cell in a real graph reports
+      # `%{nil => n}` — measured on the Red Hook graph, `search_documents` is
+      # `%{nil: 10018}` — and `statuses/1` rejects nil keys, so those badges
+      # never render. Linking them linked something nobody could see, which is
+      # exactly what shipped and what the reviewer noticed.
+      #
+      # The count beside the name is the number an operator is looking at.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
+
+      assert html =~ "rdd-count-link"
+      assert html =~ "/rows?status="
+    end
+
+    test "a CHILD's link carries the mount point too" do
+      # The bug this pins: `base_path` was not passed down the recursion, so
+      # every node except the root fell back to the "/" default and produced
+      # `/cell/topic_zip/rows` instead of `/ops/dag/cell/topic_zip/rows` — a
+      # 404 on every row link an operator would actually click, since the root
+      # is the one node they are already looking at.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
+
+      links = Regex.scan(~r|href="([^"]*?/rows\?status=[^"]*)"|, html) |> Enum.map(&List.last/1)
+
+      assert links != [], "expected at least one row link"
+
+      for href <- links do
+        assert String.starts_with?(href, @path),
+               "row link #{href} is missing the mount point #{@path}"
+      end
+    end
+
+    test "a count with nothing behind it is not a link" do
+      # `?` (unreadable) and `—` (rows kept elsewhere) would offer a page that
+      # cannot answer.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
+
+      refute html =~ ~s(class="rdd-count rdd-count-link" title="no rows")
+    end
+
+    test "the rows route lists what the cell holds" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=present")
+
+      assert html =~ "rdd-rows"
+      # The TOTAL is the point — a page saying only "50 rows" cannot tell you
+      # whether you have seen everything.
+      assert html =~ "showing" or html =~ "No rows in this status"
+    end
+
+    test "a nil status is a real status, not an absent one" do
+      # A node with no status column, or none set. It travels as `__nil__`
+      # rather than an absent param, which would mean "every status".
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      assert html =~ "unset"
+    end
+
+    test "the rows view replaces the tree rather than sitting beside it" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=present")
+
+      # Asserting on `rdd-tree` does NOT work: the stylesheet ships inline on
+      # every page, so the class name is in the HTML whether or not a tree
+      # renders. My first version of this test matched CSS and failed for that
+      # reason rather than for the reason it claimed.
+      #
+      # A rendered node carries `id="node-…"`, which only markup produces.
+      refute html =~ ~s(id="node-),
+             "the row list is its own destination — the tree would be noise beside it"
+    end
+
+    test "there is a way back to the graph" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=present")
+
+      assert html =~ "back to the graph"
+    end
+  end
+
 end

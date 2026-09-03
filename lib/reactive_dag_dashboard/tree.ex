@@ -195,6 +195,219 @@ defmodule ReactiveDagDashboard.Tree do
   @spec flatten(node_t()) :: [node_t()]
   def flatten(node), do: [node | Enum.flat_map(node.children, &flatten/1)]
 
+  @doc """
+  One graph per shared cell, stacked — every cell drawn exactly ONCE.
+
+  The third shape, and the one that scales. `downstream/2` draws a converging
+  cell under every route that reaches it, which is honest about cost and
+  unreadable at size: on the Red Hook graph, `meeting_docs` explodes to 64 rows
+  for 17 distinct cells, with `search_documents` and `search_embeddings` each
+  drawn 18 times. `levels/2` collapses that but drops the edges as structure.
+
+  This keeps the structure and removes the duplication. Any cell reached by more
+  than one route is HOISTED out of the tree into its own graph below; where it
+  used to expand, the parent carries a link to it instead.
+
+      GRAPH 1  meeting_docs
+        ├─ agenda_items    → search_documents ↴
+        └─ meeting_events  → search_documents ↴
+
+      GRAPH 2  search_documents        ← referenced by agenda_items, meeting_events
+        └─ search_embeddings
+
+  Returns `{root, shared}` where `shared` is a list of
+  `%{id, tree, referenced_by}`, ordered so a graph appears after everything
+  that links to it. `referenced_by` is what lets the hoisted graph point back —
+  a link that goes only one way leaves you scrolling to find who wanted it.
+
+  ## What a hoisted node looks like in the main tree
+
+  `hoisted?: true` and `children: []`. The children are not lost; they are in
+  that cell's own graph. A renderer keys off `hoisted?` to draw a link rather
+  than a chevron.
+
+  ## Cycles
+
+  A `feedback` edge means a cell can be its own ancestor. Hoisting helps here
+  rather than hurting: the second arrival is a link, so the walk stops without
+  needing the cycle check to catch it. `cyclic?` is still set when a cell is on
+  the current path, because a self-referential graph should say so.
+  """
+  @spec hoisted(Plan.t(), String.t(), :upstream | :downstream) ::
+          {node_t(), [%{id: String.t(), tree: node_t(), referenced_by: [String.t()]}]}
+  def hoisted(%Plan{} = plan, id, direction \\ :downstream) do
+    next = stepper(plan, direction)
+
+    # Two passes. The first counts how many routes reach each cell, because
+    # hoisting cannot be decided while walking — the second route to a cell is
+    # only known after it arrives, and by then the first has already expanded.
+    # ITERATIVE, because hoisting changes the counts. `verdict_audit` sits below
+    # `all_verdicts` and is reached twice only BECAUSE all_verdicts is reached
+    # twice; once all_verdicts becomes a link, verdict_audit has a single route
+    # and must stay inline. Counting once marked it shared with an empty
+    # `referenced_by` — a graph nothing pointed at.
+    shared_ids = settle_shared(plan, id, next, MapSet.new())
+
+    {root, refs} = hoist_walk(plan, id, next, 0, nil, shared_ids, MapSet.new(), %{})
+
+    # Hoisted graphs are expanded with the SHARED SET MINUS THEMSELVES, so a
+    # shared cell's own subtree can contain other shared cells as links. Without
+    # the subtraction a graph would immediately link to itself.
+    {trees, refs} =
+      shared_ids
+      |> Enum.sort()
+      |> Enum.map_reduce(refs, fn sid, refs ->
+        # THREAD the refs through every graph. Built per-walk and discarded,
+        # they lost any referrer found inside a hoisted graph:
+        # `projected_meetings` links to `meeting_shell`, and meeting_shell's
+        # `referenced_by` listed only `meeting_docs` — so the backlink omitted
+        # a route the page was actually drawing.
+        {tree, refs} =
+          hoist_walk(
+            plan, sid, next, 0, nil, MapSet.delete(shared_ids, sid), MapSet.new(), refs, "g#{sid}"
+          )
+
+        {{sid, tree}, refs}
+      end)
+
+    shared =
+      Enum.map(trees, fn {sid, tree} ->
+        %{
+          id: sid,
+          tree: tree,
+          referenced_by:
+            refs
+            |> Map.get(sid, [])
+            |> Enum.uniq_by(&elem(&1, 0))
+            |> Enum.sort_by(&elem(&1, 0))
+        }
+      end)
+
+    {root, shared}
+  end
+
+  # Settle the shared set. Each round counts arrivals in the tree as it would be
+  # drawn GIVEN the current set — stopping at links — so a cell stays shared
+  # only if it is STILL reached twice once its ancestors have been hoisted.
+  #
+  # The set SHRINKS, which is the part I got wrong twice. `verdict_audit` sits
+  # below `all_verdicts` and is reached twice only because all_verdicts is;
+  # once all_verdicts becomes a link, verdict_audit has one route and belongs
+  # inline. Round 1 finds both, round 2 finds only all_verdicts — so taking the
+  # UNION never converges, and an earlier version looped forever.
+  #
+  # Replacing the set with each round's finding does converge: the count is a
+  # function of the set, so once a round reproduces its input the fixpoint is
+  # reached. `max_rounds` is a backstop, not the mechanism — a graph that
+  # oscillated would otherwise hang the page it exists to explain.
+  defp settle_shared(plan, id, next, shared, rounds_left \\ 16) do
+    # Count across EVERY graph that will be drawn — the main tree AND each
+    # hoisted cell's own graph — because a cell reached once per graph is still
+    # drawn twice on the page. Counting the main tree alone expanded
+    # `meeting_shell` in both the root graph and `projected_meetings`', since
+    # neither saw the other's arrival.
+    roots = [id | Enum.sort(shared)]
+
+    counts =
+      Enum.reduce(roots, %{}, fn root, acc ->
+        root
+        |> then(&route_counts(plan, &1, next, MapSet.delete(shared, &1)))
+        |> Map.merge(acc, fn _k, a, b -> a + b end)
+      end)
+
+    # A graph's own root is drawn by definition, so its self-arrival is not
+    # evidence of sharing — but an arrival from ANOTHER graph is.
+    found =
+      for {cid, n} <- counts,
+          cid != id,
+          n - if(cid in roots, do: 1, else: 0) > 1,
+          into: MapSet.new(),
+          do: cid
+
+    cond do
+      MapSet.equal?(found, shared) -> shared
+      rounds_left == 0 -> found
+      true -> settle_shared(plan, id, next, found, rounds_left - 1)
+    end
+  end
+
+  # How many routes reach each cell, treating anything in `shared` as a leaf —
+  # because that is how it will be drawn. Counts ROUTES, not nodes.
+  #
+  # `root` is passed explicitly rather than inferred from the accumulator: an
+  # earlier version stopped at "shared and not the first node counted", which
+  # made the result depend on traversal order, so the set never settled and
+  # `settle_shared/4` looped forever.
+  defp route_counts(plan, id, next, shared) do
+    count(plan, id, next, shared, id, MapSet.new(), %{})
+  end
+
+  defp count(plan, id, next, shared, root, path, acc) do
+    acc = Map.update(acc, id, 1, &(&1 + 1))
+
+    stop? = MapSet.member?(path, id) or (id != root and MapSet.member?(shared, id))
+
+    if stop? do
+      acc
+    else
+      path = MapSet.put(path, id)
+
+      Enum.reduce(next.(id), acc, fn child, acc ->
+        count(plan, child, next, shared, root, path, acc)
+      end)
+    end
+  end
+
+  defp hoist_walk(plan, id, next, depth, via, shared_ids, path, refs, node_path \\ "r") do
+    cyclic? = MapSet.member?(path, id)
+    hoist? = MapSet.member?(shared_ids, id)
+
+    # A hoisted node records WHO pointed at it and stops. `via` is the parent we
+    # arrived from, which is exactly the backlink the hoisted graph needs.
+    # Record the referrer AND the position of the link, because a backlink has
+    # to target something that exists. Most referrers are not themselves
+    # hoisted, so `#graph-<referrer>` is a dangling anchor — the link row is
+    # what the reader should be sent to, and rows are keyed by path.
+    refs =
+      if hoist? and via,
+        do: Map.update(refs, id, [{via, node_path}], &[{via, node_path} | &1]),
+        else: refs
+
+    {children, refs} =
+      if cyclic? or hoist? do
+        {[], refs}
+      else
+        path = MapSet.put(path, id)
+
+        next.(id)
+        |> Enum.with_index()
+        |> Enum.reduce({[], refs}, fn {child, i}, {acc, refs} ->
+          {node, refs} =
+            hoist_walk(
+              plan, child, next, depth + 1, id, shared_ids, path, refs, "#{node_path}-#{i}"
+            )
+
+          {acc ++ [node], refs}
+        end)
+      end
+
+    node = %{
+      id: id,
+      cell: plan.cells[id],
+      depth: depth,
+      via: via,
+      repeat?: false,
+      cyclic?: cyclic?,
+      hoisted?: hoist?,
+      children: children
+    }
+
+    {node, refs}
+  end
+
+  defp stepper(plan, :upstream), do: &inputs_of(plan, &1)
+  defp stepper(plan, _downstream), do: &parents_of(plan, &1)
+
   @doc "How many distinct paths this tree contains (its leaf count)."
   @spec path_count(node_t()) :: non_neg_integer()
   def path_count(%{children: []}), do: 1
@@ -265,7 +478,7 @@ defmodule ReactiveDagDashboard.Tree do
   collapsed row still has to say how much is folded under it.
   """
   @spec nested(Plan.t(), node_t()) :: map()
-  def nested(%Plan{} = plan, tree) do
+  def nested(%Plan{} = plan, tree, prefix \\ nil) do
     arrivals =
       tree
       |> flatten()
@@ -273,7 +486,11 @@ defmodule ReactiveDagDashboard.Tree do
       |> Enum.group_by(& &1.id, & &1.via)
       |> Map.new(fn {id, vias} -> {id, vias |> Enum.uniq() |> Enum.sort()} end)
 
-    walk_nested(tree, arrivals, plan, 0, tree.id)
+    # The prefix matches `hoist_walk/9`'s, so a backlink recorded there targets
+    # the row this generates. Keyed on POSITION, not cell id, because a cell
+    # appears at several positions — and each GRAPH needs its own prefix or the
+    # main tree and every stacked graph all emit `chev-r`.
+    walk_nested(tree, arrivals, plan, 0, prefix || "r")
   end
 
   defp walk_nested(node, arrivals, plan, depth, path) do
@@ -293,6 +510,9 @@ defmodule ReactiveDagDashboard.Tree do
       via: node.via,
       cyclic?: node.cyclic?,
       repeat?: node.repeat? and not node.cyclic?,
+      # `hoisted?` only comes from `hoisted/3`; the other shapes never set it,
+      # so it defaults false and they render exactly as before.
+      hoisted?: Map.get(node, :hoisted?, false),
       arrivals: Map.get(arrivals, node.id, []),
       routes: length(Map.get(arrivals, node.id, [])),
       children: length(children),

@@ -708,4 +708,47 @@ defmodule ReactiveDagDashboard.DagLiveTest do
   defp count(html, needle) do
     html |> String.split(needle) |> length() |> Kernel.-(1)
   end
+  describe "stacked graphs — the rendered markup" do
+    # The structural tests in `tree_test.exs` prove the SHAPE. These prove the
+    # page draws it: the link, the anchor it targets, and the backlink.
+
+    test "a shared cell links to its own graph instead of expanding twice" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
+
+      # `all_verdicts` is the diamond's convergence. It should appear as a LINK
+      # under each route...
+      assert html =~ "see graph ↓"
+      assert html =~ ~s(href="#graph-all_verdicts")
+
+      # ...and exactly once as a section that expands it.
+      assert html |> String.split(~s(id="graph-all_verdicts")) |> length() == 2,
+             "a shared cell must have exactly one anchor section"
+    end
+
+    test "the stacked graph says who reached it" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
+
+      assert html =~ "reached from"
+
+      # Both routes through the diamond, named — a link that goes one way
+      # leaves you scrolling to find who wanted it.
+      assert html =~ "category_health"
+      assert html =~ "spend_rollup"
+    end
+
+    test "`also here` is gone where a graph replaces it" do
+      # The old marker said a node was drawn elsewhere without saying where.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
+
+      refute html =~ "also here",
+             "a hoisted cell should carry a link, not an unaddressed marker"
+    end
+
+    test "a hoisted row offers no chevron — it has nothing to expand here" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
+
+      assert html =~ "rdd-chev-link"
+    end
+  end
+
 end

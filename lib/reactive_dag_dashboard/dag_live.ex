@@ -154,12 +154,46 @@ defmodule ReactiveDagDashboard.DagLive do
   defp record_summary(record) when is_struct(record) do
     record
     |> Map.from_struct()
-    |> Enum.reject(fn {k, v} ->
-      k in [:__meta__, :__metadata__, :id, :inserted_at, :updated_at] or is_nil(v)
-    end)
-    |> Enum.sort_by(&elem(&1, 0))
-    |> Enum.take(6)
+    |> Enum.reject(&drop_field?/1)
+    |> Enum.sort_by(&field_rank/1)
+    |> Enum.take(8)
     |> Enum.map_join("  ", fn {k, v} -> "#{k}=#{truncate(v)}" end)
+  end
+
+  # Structural columns, and fields carrying nothing.
+  #
+  # An EMPTY map or list is not information — `aggregates=%{}` told a reader
+  # only that the column exists. Two of them consumed a third of the row on
+  # `meeting_shell` while `meeting_uuid` and `slug` were cut for space.
+  defp drop_field?({k, v}) do
+    k in [:__meta__, :__metadata__, :id, :inserted_at, :updated_at] or
+      is_nil(v) or v == %{} or v == []
+  end
+
+  # IDENTITY FIRST, then everything else alphabetically.
+  #
+  # Sorting purely by name put `meeting_uuid` and `slug` at positions 7 and 9 on
+  # `meeting_shell`, so a cap of six cut exactly the two columns a reader is
+  # most likely to want — the canonical identity and the public URL — while
+  # keeping two empty maps.
+  #
+  # `_uuid` and `_id` suffixes rather than a fixed list: this library does not
+  # know a host's column names, but "ends in _uuid" is a reliable signal that a
+  # column identifies something.
+  @identity_last [:slug]
+
+  defp field_rank({k, _v}) do
+    name = Atom.to_string(k)
+
+    rank =
+      cond do
+        String.ends_with?(name, "_uuid") -> 0
+        k in @identity_last -> 1
+        String.ends_with?(name, "_id") and k != :municipality_id -> 2
+        true -> 3
+      end
+
+    {rank, name}
   end
 
   defp record_summary(_), do: ""

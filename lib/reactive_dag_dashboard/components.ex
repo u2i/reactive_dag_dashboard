@@ -498,6 +498,12 @@ defmodule ReactiveDagDashboard.Components do
       /* A badge that is a link. Same pill, plus the affordance — the count was
          already the most legible thing on the row, so it should not change
          shape to become clickable. */
+      /* The count, as a link. Same size and weight — it is the number the eye
+         already lands on, and changing its shape to say "clickable" would cost
+         the scanability that makes it useful. */
+      .rdd-count-link { text-decoration: none; cursor: pointer }
+      .rdd-count-link:hover { color: var(--accent); text-decoration: underline }
+
       .rdd-badge-link { text-decoration: none; cursor: pointer }
       .rdd-badge-link:hover { filter: brightness(1.35) }
 
@@ -975,7 +981,32 @@ defmodule ReactiveDagDashboard.Components do
           </div>
         </div>
 
-        <span class="rdd-count" title={count_title(@status[@node.id])}>
+        <%!-- THE COUNT IS THE LINK. It is the number on the row — every cell
+              in a real graph reports `%{nil => n}`, so the per-status badges
+              never render and linking those linked nothing anyone could see.
+              This is what an operator is looking at when they want the rows.
+
+              Not a link when there is nothing to show: an unreadable node
+              (`?`) or a node that keeps its rows elsewhere (`—`) would offer a
+              page that cannot answer.
+
+              The `title` stays EXACTLY the count's explanation — it answers
+              "why is this number what it is", which a link's own affordance
+              does not replace, and a test pins it. --%>
+        <.link
+          :if={countable?(@status[@node.id])}
+          navigate={rows_path(@base_path, @node.id, nil)}
+          class="rdd-count rdd-count-link"
+          title={count_title(@status[@node.id])}
+        >
+          <%= key_count(@status[@node.id]) %>
+        </.link>
+
+        <span
+          :if={not countable?(@status[@node.id])}
+          class="rdd-count"
+          title={count_title(@status[@node.id])}
+        >
           <%= key_count(@status[@node.id]) %>
         </span>
       </div>
@@ -2120,6 +2151,15 @@ defmodule ReactiveDagDashboard.Components do
 
   defp count_title(%{key_count: 0}), do: "no rows"
   defp count_title(%{key_count: n}), do: "#{n} keys"
+
+  # A count worth clicking: a real number of rows this node holds HERE. `nil`
+  # (never read), `:unreadable` and `:elsewhere` all render a placeholder, and
+  # a link on a placeholder offers a page that cannot answer.
+  defp countable?(nil), do: false
+  defp countable?(%{rows: :unreadable}), do: false
+  defp countable?(%{rows: :elsewhere}), do: false
+  defp countable?(%{key_count: n}) when is_integer(n) and n > 0, do: true
+  defp countable?(_), do: false
 
   defp key_count(nil), do: "?"
   defp key_count(%{rows: :unreadable}), do: "?"

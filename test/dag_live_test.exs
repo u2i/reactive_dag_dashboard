@@ -759,12 +759,26 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     # A status badge was a dead end: `present 727` stated a number and gave you
     # no way to see what it counted. It is now a link to those rows.
 
-    test "the badge links to its status's rows" do
+    test "the KEY COUNT is the link" do
+      # Not the per-status badges. Every cell in a real graph reports
+      # `%{nil => n}` — measured on the Red Hook graph, `search_documents` is
+      # `%{nil: 10018}` — and `statuses/1` rejects nil keys, so those badges
+      # never render. Linking them linked something nobody could see, which is
+      # exactly what shipped and what the reviewer noticed.
+      #
+      # The count beside the name is the number an operator is looking at.
       {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
 
-      assert html =~ "/cell/", "the count should be a link"
-      assert html =~ "rdd-badge-link"
+      assert html =~ "rdd-count-link"
       assert html =~ "/rows?status="
+    end
+
+    test "a count with nothing behind it is not a link" do
+      # `?` (unreadable) and `—` (rows kept elsewhere) would offer a page that
+      # cannot answer.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
+
+      refute html =~ ~s(class="rdd-count rdd-count-link" title="no rows")
     end
 
     test "the rows route lists what the cell holds" do

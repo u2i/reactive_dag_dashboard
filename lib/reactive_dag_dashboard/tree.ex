@@ -263,7 +263,9 @@ defmodule ReactiveDagDashboard.Tree do
         # `referenced_by` listed only `meeting_docs` — so the backlink omitted
         # a route the page was actually drawing.
         {tree, refs} =
-          hoist_walk(plan, sid, next, 0, nil, MapSet.delete(shared_ids, sid), MapSet.new(), refs)
+          hoist_walk(
+            plan, sid, next, 0, nil, MapSet.delete(shared_ids, sid), MapSet.new(), refs, "g#{sid}"
+          )
 
         {{sid, tree}, refs}
       end)
@@ -273,7 +275,11 @@ defmodule ReactiveDagDashboard.Tree do
         %{
           id: sid,
           tree: tree,
-          referenced_by: refs |> Map.get(sid, []) |> Enum.uniq() |> Enum.sort()
+          referenced_by:
+            refs
+            |> Map.get(sid, [])
+            |> Enum.uniq_by(&elem(&1, 0))
+            |> Enum.sort_by(&elem(&1, 0))
         }
       end)
 
@@ -352,13 +358,20 @@ defmodule ReactiveDagDashboard.Tree do
     end
   end
 
-  defp hoist_walk(plan, id, next, depth, via, shared_ids, path, refs) do
+  defp hoist_walk(plan, id, next, depth, via, shared_ids, path, refs, node_path \\ "r") do
     cyclic? = MapSet.member?(path, id)
     hoist? = MapSet.member?(shared_ids, id)
 
     # A hoisted node records WHO pointed at it and stops. `via` is the parent we
     # arrived from, which is exactly the backlink the hoisted graph needs.
-    refs = if hoist? and via, do: Map.update(refs, id, [via], &[via | &1]), else: refs
+    # Record the referrer AND the position of the link, because a backlink has
+    # to target something that exists. Most referrers are not themselves
+    # hoisted, so `#graph-<referrer>` is a dangling anchor — the link row is
+    # what the reader should be sent to, and rows are keyed by path.
+    refs =
+      if hoist? and via,
+        do: Map.update(refs, id, [{via, node_path}], &[{via, node_path} | &1]),
+        else: refs
 
     {children, refs} =
       if cyclic? or hoist? do
@@ -366,8 +379,14 @@ defmodule ReactiveDagDashboard.Tree do
       else
         path = MapSet.put(path, id)
 
-        Enum.reduce(next.(id), {[], refs}, fn child, {acc, refs} ->
-          {node, refs} = hoist_walk(plan, child, next, depth + 1, id, shared_ids, path, refs)
+        next.(id)
+        |> Enum.with_index()
+        |> Enum.reduce({[], refs}, fn {child, i}, {acc, refs} ->
+          {node, refs} =
+            hoist_walk(
+              plan, child, next, depth + 1, id, shared_ids, path, refs, "#{node_path}-#{i}"
+            )
+
           {acc ++ [node], refs}
         end)
       end
@@ -459,7 +478,7 @@ defmodule ReactiveDagDashboard.Tree do
   collapsed row still has to say how much is folded under it.
   """
   @spec nested(Plan.t(), node_t()) :: map()
-  def nested(%Plan{} = plan, tree) do
+  def nested(%Plan{} = plan, tree, prefix \\ nil) do
     arrivals =
       tree
       |> flatten()
@@ -467,7 +486,11 @@ defmodule ReactiveDagDashboard.Tree do
       |> Enum.group_by(& &1.id, & &1.via)
       |> Map.new(fn {id, vias} -> {id, vias |> Enum.uniq() |> Enum.sort()} end)
 
-    walk_nested(tree, arrivals, plan, 0, tree.id)
+    # The prefix matches `hoist_walk/9`'s, so a backlink recorded there targets
+    # the row this generates. Keyed on POSITION, not cell id, because a cell
+    # appears at several positions — and each GRAPH needs its own prefix or the
+    # main tree and every stacked graph all emit `chev-r`.
+    walk_nested(tree, arrivals, plan, 0, prefix || "r")
   end
 
   defp walk_nested(node, arrivals, plan, depth, path) do
@@ -487,6 +510,9 @@ defmodule ReactiveDagDashboard.Tree do
       via: node.via,
       cyclic?: node.cyclic?,
       repeat?: node.repeat? and not node.cyclic?,
+      # `hoisted?` only comes from `hoisted/3`; the other shapes never set it,
+      # so it defaults false and they render exactly as before.
+      hoisted?: Map.get(node, :hoisted?, false),
       arrivals: Map.get(arrivals, node.id, []),
       routes: length(Map.get(arrivals, node.id, [])),
       children: length(children),

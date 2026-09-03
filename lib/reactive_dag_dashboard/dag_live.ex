@@ -643,6 +643,7 @@ defmodule ReactiveDagDashboard.DagLive do
     |> assign(:starts, Tree.starting_points(socket.assigns.plan, socket.assigns.direction))
     |> assign(:details, %{})
     |> assign(:node, nil)
+    |> assign(:shared_graphs, [])
     |> assign(:routes, 0)
     |> assign(:bands, [])
     |> assign(:dead_end?, false)
@@ -650,6 +651,12 @@ defmodule ReactiveDagDashboard.DagLive do
 
   defp assign_view(%{assigns: %{plan: plan, root: id, direction: dir}} = socket) do
     tree = tree_for(plan, id, dir)
+
+    # `tree` (exploded) still drives `details_for/3`, `path_count/1` and
+    # `levels/2`: those answer "what does a change COST", where a cell reached
+    # by three routes really is three recomputes. `hoisted/3` answers "what is
+    # the SHAPE", where drawing it three times is just noise.
+    {hoisted_root, shared} = Tree.hoisted(plan, id, dir)
 
     socket
     # The starting points depend on direction, so they are assigned here where
@@ -661,7 +668,15 @@ defmodule ReactiveDagDashboard.DagLive do
     |> assign(:details, details_for(plan, tree, socket.assigns.controls))
     # NESTED, not flattened: the markup recurses so containment is real
     # structure rather than a computed margin. See Components.hierarchy/1.
-    |> assign(:node, Tree.nested(plan, tree))
+    |> assign(:node, Tree.nested(plan, hoisted_root))
+    # One graph per shared cell, stacked below the main one. The exploded tree
+    # drew a converging cell under every route that reaches it — 64 rows for 17
+    # cells on a real graph, with one node drawn 18 times. Each cell is now
+    # expanded once, and the routes to it are links.
+    |> assign(
+      :shared_graphs,
+      Enum.map(shared, &%{&1 | tree: Tree.nested(plan, &1.tree, "g#{&1.id}")})
+    )
     |> assign(:routes, Tree.path_count(tree))
     # The diagram's scope, from the same tree the expression uses. Whole-plan
     # levels drew every cell at once, which at real graph sizes is a tangle no
@@ -961,6 +976,28 @@ defmodule ReactiveDagDashboard.DagLive do
 
       <div :if={@root && @view == :tree && @node && not @dead_end?}>
         <.hierarchy node={@node} status={@status} details={@details} activity={@activity} />
+
+        <%!-- One graph per shared cell, stacked. A cell reached by several
+              routes is drawn ONCE, here, and every route to it carries a link
+              down to this anchor. The alternative — expanding it under each
+              route — put 64 rows on the page for 17 cells. --%>
+        <section
+          :for={g <- @shared_graphs}
+          id={"graph-#{g.id}"}
+          class="rdd-shared-graph"
+        >
+          <div class="rdd-shared-head">
+            <h3><code><%= g.id %></code></h3>
+            <%!-- The backlink. A link that goes one way leaves you scrolling
+                  to find who wanted this. --%>
+            <p class="rdd-shared-refs">
+              reached from
+              <%= for {{ref, at}, i} <- Enum.with_index(g.referenced_by) do %><%= if i > 0, do: ", " %><a href={"#node-#{at}"}><code><%= ref %></code></a><% end %>
+            </p>
+          </div>
+
+          <.hierarchy node={g.tree} status={@status} details={@details} activity={@activity} />
+        </section>
       </div>
     </main>
     """

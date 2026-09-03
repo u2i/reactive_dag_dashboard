@@ -446,7 +446,9 @@ defmodule ReactiveDagDashboard.TreeTest do
       # A link that goes one way leaves you scrolling to find who wanted it.
       {_root, [%{referenced_by: refs}]} = Tree.hoisted(plan, "expenses")
 
-      assert refs == ["category_health", "spend_rollup"]
+      # `{cell, path}` — the cell names the referrer, the path is where the
+      # link sits so a backlink has something real to target.
+      assert Enum.map(refs, &elem(&1, 0)) == ["category_health", "spend_rollup"]
     end
 
     test "no cell is EXPANDED twice across all the graphs", %{plan: plan} do
@@ -534,8 +536,27 @@ defmodule ReactiveDagDashboard.TreeTest do
       for %{id: id, referenced_by: refs} <- shared do
         sites = all |> Enum.filter(&(&1.id == id and &1.hoisted?)) |> Enum.map(& &1.via)
 
-        assert Enum.sort(Enum.uniq(sites)) == refs,
+        # `referenced_by` is `{cell, path}` — the cell names the referrer, the
+        # path is WHERE the link sits, which is what a backlink can target. A
+        # referrer is usually not itself hoisted, so `#graph-<referrer>` would
+        # dangle.
+        assert Enum.sort(Enum.uniq(sites)) == refs |> Enum.map(&elem(&1, 0)) |> Enum.sort(),
                "#{id}: linked from #{inspect(Enum.uniq(sites))} but referenced_by says #{inspect(refs)}"
+
+        # Every recorded path must name a row that actually renders. Paths only
+        # exist after `nested/2` — the raw tree carries positions implicitly —
+        # so this checks against the rendered shape.
+        paths =
+          [root | Enum.map(shared, & &1.tree)]
+          |> Enum.map(&Tree.nested(plan, &1))
+          |> Enum.flat_map(&nested_flatten/1)
+          |> Enum.map(& &1.path)
+          |> MapSet.new()
+
+        for {ref, at} <- refs do
+          assert MapSet.member?(paths, at),
+                 "#{id}'s backlink to #{ref} targets #{at}, which is not a row on the page"
+        end
       end
     end
 
@@ -550,5 +571,8 @@ defmodule ReactiveDagDashboard.TreeTest do
       assert is_list(shared)
     end
   end
+
+  # `nested/2` output nests under `:kids`, not `:children`.
+  defp nested_flatten(node), do: [node | Enum.flat_map(node.kids, &nested_flatten/1)]
 
 end

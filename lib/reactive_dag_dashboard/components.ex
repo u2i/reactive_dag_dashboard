@@ -442,6 +442,39 @@ defmodule ReactiveDagDashboard.Components do
                         color: #cdb6fb }
       .rdd-grain-one { background: #222a36; color: var(--faint) }
 
+      /* The link to a hoisted cell's own graph. Reads as an ACTION — it moves
+         you down the page — where the grain badges beside it are labels, so it
+         gets the accent and a pointer rather than the muted fill. */
+      .rdd-grain-link {
+        background: #1d2b3a; color: #7fb0e8; text-decoration: none;
+        border: 1px solid #2c4560; cursor: pointer;
+      }
+      .rdd-grain-link:hover { background: #24384c; color: #a8cbf0; }
+
+      /* Where a chevron would be. A hoisted node has no children HERE, so the
+         slot says "look down" instead of offering to expand nothing. */
+      .rdd-chev-link { color: #7fb0e8; cursor: default; }
+
+      /* A stacked graph: one per shared cell, below the main tree. The rule and
+         the space are what make it read as a separate graph rather than a
+         continuation of the one above. */
+      .rdd-shared-graph {
+        margin-top: 1.75rem; padding-top: 1rem;
+        border-top: 1px solid #2a3442;
+        scroll-margin-top: 1rem;
+      }
+      .rdd-shared-head { margin-bottom: .5rem; }
+      .rdd-shared-head h3 { margin: 0; font-size: .9rem; font-weight: 600; }
+      .rdd-shared-head code { color: #cfe0f5; }
+      .rdd-shared-refs {
+        margin: .15rem 0 0; font-size: .75rem; color: var(--faint);
+      }
+      .rdd-shared-refs a { color: #7fb0e8; text-decoration: none; }
+      .rdd-shared-refs a:hover { text-decoration: underline; }
+
+      /* Anchor targets sit under a sticky header on a scrolled page. */
+      .rdd-node { scroll-margin-top: 1rem; }
+
       .rdd-name { font-size: 13.5px; font-weight: 600; margin-top: 1px }
       .rdd-name button { font: inherit; background: none; border: 0; padding: 0;
                          cursor: pointer; text-align: left; color: #cdd6df }
@@ -661,7 +694,15 @@ defmodule ReactiveDagDashboard.Components do
 
   defp tree_node(assigns) do
     ~H"""
-    <div class={[
+    <%!-- `path` is unique per NODE POSITION; `id` is not. A hoisted cell has one
+          link site per route, so keying the anchor on the cell id put the same
+          DOM id on several rows and LiveView refused to render.
+
+          The anchor a backlink targets is on the stacked graph's <section>
+          instead, which exists exactly once per shared cell. --%>
+    <div
+      id={"node-#{@node.path}"}
+      class={[
       "rdd-node",
       kind_class(@node),
       @node.routes > 1 && "rdd-many",
@@ -671,14 +712,18 @@ defmodule ReactiveDagDashboard.Components do
         <span class="rdd-lead"></span>
 
         <span
-          :if={@node.children > 0}
+          :if={@node.children > 0 and not @node.hoisted?}
           id={"chev-#{@node.path}"}
           class={["rdd-chev", not @node.closed? && "rotate-90"]}
           phx-click={toggle_kids(@node)}
         >
           ▸
         </span>
-        <span :if={@node.children == 0} class="rdd-chev rdd-chev-none"></span>
+        <%!-- A hoisted node has no children HERE — they are drawn in that
+              cell's own graph below — so it must not offer a chevron that
+              expands nothing. The arrow points down the page, at the anchor. --%>
+        <span :if={@node.hoisted?} class="rdd-chev rdd-chev-link">↓</span>
+        <span :if={@node.children == 0 and not @node.hoisted?} class="rdd-chev rdd-chev-none"></span>
 
         <div class="rdd-body">
           <div class="rdd-kind">
@@ -733,7 +778,23 @@ defmodule ReactiveDagDashboard.Components do
               × <%= @node.routes %> routes
             </span>
 
-            <span :if={@node.repeat?} class="rdd-grain rdd-grain-one" title="expanded under its other input">
+            <%!-- The LINK, in the box. `also here` told you a node was drawn
+                  elsewhere without saying where, so you scanned the page for a
+                  second copy. This jumps to the graph that expands it. --%>
+            <a
+              :if={@node.hoisted?}
+              href={"#graph-#{@node.id}"}
+              class="rdd-grain rdd-grain-link"
+              title="this cell is expanded in its own graph below"
+            >
+              see graph ↓
+            </a>
+
+            <span
+              :if={@node.repeat? and not @node.hoisted?}
+              class="rdd-grain rdd-grain-one"
+              title="expanded under its other input"
+            >
               also here
             </span>
 

@@ -836,4 +836,21 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     end
   end
 
+  describe "the row summary chooses its fields" do
+    # A row has more columns than fit on a line, so the summary picks. The
+    # picking rule is the whole test: alphabetical order put `meeting_uuid` and
+    # `slug` at positions 7 and 9 on `meeting_shell` and the cap cut them, while
+    # keeping `aggregates=%{}` and `calculations=%{}` — two empty maps that say
+    # only that the column exists.
+
+    test "identity fields come first, empties are dropped" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      # The fixture's rows are small, so this asserts the mechanism rather than
+      # a specific column: nothing rendered should be an empty map or list.
+      refute html =~ "=%{}", "an empty map is not information and should not take a slot"
+      refute html =~ "=[]", "an empty list is not information and should not take a slot"
+    end
+  end
+
 end

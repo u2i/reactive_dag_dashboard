@@ -791,6 +791,44 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       end
     end
 
+    test "every link ON the rows page keeps the mount point" do
+      # The bug: `base_path` stripped `cell/<id>` but not `/rows`, and on
+      # `/admin/dag/cell/meeting/rows` the `cell/<id>` suffix is not a suffix —
+      # so the base became the WHOLE path and every link hung off it:
+      #
+      #     back to the graph -> /admin/dag/cell/meeting/rows/cell/meeting
+      #     each leaf link    -> /admin/dag/cell/meeting/rows/cell/fiscal_docs
+      #
+      # One cause, every link on the page.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      links =
+        Regex.scan(~r|href="(/[^"]*)"|, markup(html))
+        |> Enum.map(&List.last/1)
+        |> Enum.filter(&String.contains?(&1, "/cell/"))
+
+      assert links != [], "expected links on the rows page"
+
+      for href <- links do
+        refute String.contains?(href, "/rows/cell/"),
+               "#{href} was built under the rows route rather than the mount point"
+
+        assert String.starts_with?(href, @path),
+               "#{href} is missing the mount point #{@path}"
+      end
+    end
+
+    test "back to the graph reaches the cell the rows came from" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      [href] =
+        Regex.run(~r|href="([^"]*)"[^>]*class="rdd-rows-back"|, markup(html))
+        |> tl()
+
+      assert href == "#{@path}/cell/expenses",
+             "back went to #{href}, which is not the cell page"
+    end
+
     test "a count with nothing behind it is not a link" do
       # `?` (unreadable) and `—` (rows kept elsewhere) would offer a page that
       # cannot answer.

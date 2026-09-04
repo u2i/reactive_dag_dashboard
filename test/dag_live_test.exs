@@ -870,6 +870,20 @@ defmodule ReactiveDagDashboard.DagLiveTest do
              "quotes belong to the literal, not to the value"
     end
 
+    test "a uuid column is shortened to a recognisable prefix" do
+      # Measured on cascade's `meeting`: `meeting_uuid` is the WIDEST column at
+      # 36ch — wider than the table's 22ch cap — while the first six characters
+      # already distinguish all 189 rows. A uuid here tells rows apart; it is
+      # not read. The whole value is one click away in the modal.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+      html = markup(html)
+
+      assert html =~ "8152f453…", "the prefix identifies the row"
+
+      refute html =~ "8152f453-dac9-49df-b9bd-746aaf486eb7",
+             "the full uuid costs a quarter of the table to say what eight characters say"
+    end
+
     test "the key is not also a derived column" do
       # The table leads with a `key` column, so the same value appearing again
       # among the fields is noise — and it cost a slot a real field could use.
@@ -984,6 +998,7 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       refute html =~ "=[]", "an empty list is not information and should not take a slot"
     end
   end
+
 
 
 end

@@ -189,12 +189,28 @@ defmodule ReactiveDagDashboard.DagLive do
 
   # One cell of the table. `nil` reads as an em dash rather than blank, so an
   # absent value is distinguishable from a rendering gap.
+  # A UUID COLUMN IS FOR RECOGNITION, not for reading. Measured on cascade's
+  # `meeting`: it is the widest column at 36ch, and the first SIX characters
+  # already distinguish all 189 rows — so the full value costs a quarter of the
+  # table's width to say what eight characters say. The whole value is one
+  # click away in the modal.
+  @uuid_chars 8
+
   defp cell_value(%{record: r}, field) when is_struct(r) do
     case Map.get(r, field) do
-      nil -> "—"
-      v -> truncate(v)
+      nil ->
+        "—"
+
+      v ->
+        if uuid_field?(field) and is_binary(v) do
+          String.slice(v, 0, @uuid_chars) <> "…"
+        else
+          truncate(v)
+        end
     end
   end
+
+  defp uuid_field?(field), do: String.ends_with?(Atom.to_string(field), "_uuid")
 
   defp cell_value(_row, _field), do: "—"
 

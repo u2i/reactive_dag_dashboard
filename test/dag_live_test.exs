@@ -842,6 +842,26 @@ defmodule ReactiveDagDashboard.DagLiveTest do
              "the rows section is a table, not a column of prose"
     end
 
+    test "the chrome above the table widens with it" do
+      # The header, the leaf chips, the view tabs and the empty-state panel all
+      # carry a 1080px reading measure. Once the table beneath them ran the full
+      # window they stopped mid-page while it did not — which reads as a broken
+      # layout, not as a measure.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      assert markup(html) =~ "rdd-wide",
+             "the rows route should mark itself as the wide one"
+    end
+
+    test "the GRAPH page keeps the reading measure" do
+      # The other half, and the one that would regress silently: a tree is
+      # prose-shaped and 2000px of it is harder to read, not easier.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses")
+
+      refute markup(html) =~ "rdd-wide",
+             "only the rows route is wide"
+    end
+
     test "a wide table scrolls inside its own box, not the page" do
       # The other half of removing the cap: a node wider than the window must
       # not make the PAGE scroll sideways.

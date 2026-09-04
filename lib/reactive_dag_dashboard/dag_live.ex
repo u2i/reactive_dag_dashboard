@@ -1061,7 +1061,7 @@ defmodule ReactiveDagDashboard.DagLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <main class="rdd">
+    <main class={["rdd", @live_action == :rows && "rdd-wide"]}>
       <%!-- The styles travel WITH the page, so a host that supplies its own
             `root_layout:` — which the docs recommend, and which cascade does —
             still gets them. They used to live only in this library's own

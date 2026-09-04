@@ -829,6 +829,30 @@ defmodule ReactiveDagDashboard.DagLiveTest do
              "back went to #{href}, which is not the cell page"
     end
 
+    test "the rows section is not held to the prose reading width" do
+      # `.rdd-rows` carried `max-width: 1080px`, which is a READING measure —
+      # right for the tree and the log, wrong for a table. Since the row list
+      # became a column per field it can carry nine or more, and the cap clipped
+      # `sewer_costs` mid-`transactions` while the rest of the window sat empty.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      [rule] = Regex.run(~r|\.rdd-rows \{[^}]*\}|, html)
+
+      refute rule =~ "1080px",
+             "the rows section is a table, not a column of prose"
+    end
+
+    test "a wide table scrolls inside its own box, not the page" do
+      # The other half of removing the cap: a node wider than the window must
+      # not make the PAGE scroll sideways.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      assert html =~ "rdd-rows-scroll", "the scroll container should be present"
+
+      [rule] = Regex.run(~r|\.rdd-rows-scroll \{[^}]*\}|, html)
+      assert rule =~ "overflow-x: auto"
+    end
+
     test "a count with nothing behind it is not a link" do
       # `?` (unreadable) and `—` (rows kept elsewhere) would offer a page that
       # cannot answer.

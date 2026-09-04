@@ -464,7 +464,15 @@ defmodule ReactiveDagDashboard.Components do
          A table, not a tree: this is the one place the dashboard shows DATA
          rather than structure, so it looks like a register and not like the
          node boxes above it. */
-      .rdd-rows { max-width: 1080px }
+      /* NO 1080px CAP. That measure is a reading width — right for the tree,
+         the log and the header, which are prose-shaped — and wrong for a table.
+         Since the row list became a column per field it can carry nine or more
+         columns, and the cap clipped `sewer_costs` mid-`transactions` while
+         leaving the rest of the window empty.
+         The table still governs its own overflow: `.rdd-rows-scroll` scrolls
+         sideways inside this box when the columns exceed the window, so a wide
+         node never makes the PAGE scroll. */
+      .rdd-rows { max-width: 100% }
       .rdd-rows-head { display: flex; align-items: baseline;
                        justify-content: space-between; gap: 12px;
                        margin-bottom: 6px }

@@ -1040,11 +1040,21 @@ defmodule ReactiveDagDashboard.DagLive do
   end
 
   # The host picks the mount prefix, so links derive from the request URI.
+  # THE MOUNT POINT, recovered from whatever route we are on. Every link on the
+  # page hangs off it, so getting it wrong breaks all of them at once.
+  #
+  # `/rows` has to come off FIRST. On `/admin/dag/cell/meeting/rows` only the
+  # `cell/<id>` suffix was stripped — which is not a suffix there — so the base
+  # became the whole path and every link was built beneath it:
+  #
+  #     back to the graph -> /admin/dag/cell/meeting/rows/cell/meeting   404
+  #     each leaf link    -> /admin/dag/cell/meeting/rows/cell/fiscal_docs
+  #
+  # Both symptoms, one cause. Present since the rows route was added.
   defp base_path(uri, cell_id) do
-    suffix = if cell_id, do: "cell/#{cell_id}", else: ""
-
     (URI.parse(uri).path || "/")
-    |> String.replace_suffix(suffix, "")
+    |> String.replace_suffix("/rows", "")
+    |> String.replace_suffix(if(cell_id, do: "cell/#{cell_id}", else: ""), "")
     |> then(&if String.ends_with?(&1, "/"), do: &1, else: &1 <> "/")
   end
 

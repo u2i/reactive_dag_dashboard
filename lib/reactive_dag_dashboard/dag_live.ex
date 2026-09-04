@@ -282,6 +282,15 @@ defmodule ReactiveDagDashboard.DagLive do
   # because a date or a map has no better one-line form.
   defp truncate(v) when is_binary(v), do: String.slice(v, 0, 60)
 
+  # A DATE IS A DATE. `inspect/1` gives `~D[2011-01-03]`, which is Elixir's
+  # literal syntax leaking into a column a person reads — seen against
+  # production `meeting` rows, where every date carried four characters of
+  # sigil. `to_string/1` on these gives the ISO form they already print as.
+  defp truncate(%Date{} = v), do: to_string(v)
+  defp truncate(%DateTime{} = v), do: to_string(v)
+  defp truncate(%NaiveDateTime{} = v), do: to_string(v)
+  defp truncate(%Time{} = v), do: to_string(v)
+
   defp truncate(v) do
     v |> inspect(limit: 3, printable_limit: 60) |> String.slice(0, 60)
   end

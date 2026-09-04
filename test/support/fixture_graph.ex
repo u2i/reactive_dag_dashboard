@@ -34,6 +34,9 @@ defmodule ReactiveDagDashboard.FixtureGraph do
       # A `*_uuid` column, because the row list shortens those — and without one
       # here that rendering path had no test.
       attribute(:vendor_uuid, :string, public?: true)
+      # A DATE, for the same reason: the row list formats these rather than
+      # inspecting them, and nothing in this graph had one.
+      attribute(:incurred_on, :date, public?: true)
     end
 
     actions do
@@ -41,7 +44,7 @@ defmodule ReactiveDagDashboard.FixtureGraph do
 
       create :upsert do
         upsert?(true)
-        accept([:key, :category, :amount, :fiscal_year, :vendor_uuid])
+        accept([:key, :category, :amount, :fiscal_year, :vendor_uuid, :incurred_on])
       end
     end
 
@@ -814,7 +817,8 @@ defmodule ReactiveDagDashboard.FixtureGraph do
         category: cat,
         amount: amt,
         fiscal_year: if(k == "e1", do: "FY25", else: "FY24"),
-        vendor_uuid: uuid
+        vendor_uuid: uuid,
+        incurred_on: if(k == "e1", do: ~D[2025-03-14], else: ~D[2024-11-02])
       })
       |> Ash.create!()
     end

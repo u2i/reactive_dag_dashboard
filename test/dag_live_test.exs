@@ -884,6 +884,19 @@ defmodule ReactiveDagDashboard.DagLiveTest do
              "the full uuid costs a quarter of the table to say what eight characters say"
     end
 
+    test "a date reads as a date, not as an Elixir literal" do
+      # `inspect/1` gives `~D[2011-01-03]`. Seen against production `meeting`
+      # rows: every date carried four characters of sigil into a column a
+      # person reads.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+      html = markup(html)
+
+      assert html =~ "2025-03-14", "the date should be there at all"
+
+      refute html =~ "~D[",
+             "sigil syntax belongs in code, not in a table cell"
+    end
+
     test "the key is not also a derived column" do
       # The table leads with a `key` column, so the same value appearing again
       # among the fields is noise — and it cost a slot a real field could use.

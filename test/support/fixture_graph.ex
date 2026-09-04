@@ -31,6 +31,9 @@ defmodule ReactiveDagDashboard.FixtureGraph do
       attribute(:category, :string, public?: true)
       attribute(:amount, :float, public?: true)
       attribute(:fiscal_year, :string, public?: true)
+      # A `*_uuid` column, because the row list shortens those — and without one
+      # here that rendering path had no test.
+      attribute(:vendor_uuid, :string, public?: true)
     end
 
     actions do
@@ -38,7 +41,7 @@ defmodule ReactiveDagDashboard.FixtureGraph do
 
       create :upsert do
         upsert?(true)
-        accept([:key, :category, :amount, :fiscal_year])
+        accept([:key, :category, :amount, :fiscal_year, :vendor_uuid])
       end
     end
 
@@ -801,13 +804,17 @@ defmodule ReactiveDagDashboard.FixtureGraph do
         row <- Ash.read!(r),
         do: Ash.destroy!(row)
 
-    for {k, cat, amt} <- [{"e1", "travel", 500.0}, {"e2", "meals", 40.0}] do
+    for {k, cat, amt, uuid} <- [
+          {"e1", "travel", 500.0, "8152f453-dac9-49df-b9bd-746aaf486eb7"},
+          {"e2", "meals", 40.0, "5086d90a-0512-4f64-a2f1-6e4434c7abfa"}
+        ] do
       Expenses
       |> Ash.Changeset.for_create(:upsert, %{
         key: k,
         category: cat,
         amount: amt,
-        fiscal_year: if(k == "e1", do: "FY25", else: "FY24")
+        fiscal_year: if(k == "e1", do: "FY25", else: "FY24"),
+        vendor_uuid: uuid
       })
       |> Ash.create!()
     end

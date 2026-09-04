@@ -473,6 +473,20 @@ defmodule ReactiveDagDashboard.Components do
          sideways inside this box when the columns exceed the window, so a wide
          node never makes the PAGE scroll. */
       .rdd-rows { max-width: 100% }
+
+      /* THE CHROME MATCHES THE TABLE. Every block above the row list — the
+         header, the leaf chips, the view tabs, the "not connected" panel —
+         carries a 1080px reading measure, which is right on the graph page.
+         On the ROWS page the table beneath them now runs the full window, so
+         they stopped mid-page while it did not: the header ended at 1080px
+         with the table continuing past it, which reads as a broken layout
+         rather than as a measure.
+         Scoped to `.rdd-wide`, set only on the rows route, so the tree keeps
+         the reading width it was tuned for. */
+      .rdd-wide .rdd-head,
+      .rdd-wide .rdd-starts,
+      .rdd-wide .rdd-bar,
+      .rdd-wide .rdd-empty { max-width: 100% }
       .rdd-rows-head { display: flex; align-items: baseline;
                        justify-content: space-between; gap: 12px;
                        margin-bottom: 6px }

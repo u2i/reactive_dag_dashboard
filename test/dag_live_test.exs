@@ -836,6 +836,138 @@ defmodule ReactiveDagDashboard.DagLiveTest do
     end
   end
 
+  describe "the rows list is a table, one column per field" do
+    # It used to be three columns with every field crammed into the third as
+    # `k=v k=v k=v`. Nothing lined up, so no value could be read down a column —
+    # which is the entire reason to put rows in a grid.
+
+    test "each field gets its own column header" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      for field <- ~w(category amount fiscal_year) do
+        assert html =~ "<th>#{field}</th>",
+               "#{field} should be a column of its own, not part of a blob"
+      end
+    end
+
+    test "values are cells, not `k=v` text" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      refute html =~ "category=",
+             "a value glued to its field name is the format this replaced"
+
+      assert html =~ "rdd-rows-cell"
+    end
+
+    test "a string reads as its text, not as an inspected literal" do
+      # `inspect/1` renders `"travel"` with the quotes visible, which read as
+      # part of the value and cost two characters of an already narrow column.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      assert html =~ "travel", "the value should be there at all"
+
+      refute html =~ "&quot;travel&quot;",
+             "quotes belong to the literal, not to the value"
+    end
+
+    test "the key is not also a derived column" do
+      # The table leads with a `key` column, so the same value appearing again
+      # among the fields is noise — and it cost a slot a real field could use.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      headers = Regex.scan(~r|<th[^>]*>([^<]*)</th>|, html) |> Enum.map(&List.last/1)
+
+      assert Enum.count(headers, &(String.trim(&1) == "key")) == 1,
+             "`key` appeared #{Enum.count(headers, &(String.trim(&1) == "key"))} times"
+    end
+
+    test "a column is kept when ANY row has it" do
+      # Dropping a column per row is what makes a table ragged: the header and
+      # the cells must agree on how many columns there are, or every row after
+      # a nil shifts left.
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      # EVERY `<th>`, including the empty one over the `view` button. Counting
+      # only headers with text made this fail by exactly one and blame the
+      # markup, which was right.
+      headers = Regex.scan(~r|<th[^>]*>.*?</th>|s, html)
+      body_rows = Regex.scan(~r|<tr>\s*<td class="rdd-rows-key">.*?</tr>|s, html)
+
+      assert body_rows != [], "no rows rendered — this test would pass vacuously"
+
+      for [row] <- body_rows do
+        cells = Regex.scan(~r|<td[^>]*>|, row) |> length()
+
+        assert cells == length(headers),
+               "a row has #{cells} cells against #{length(headers)} headers — the table is ragged"
+      end
+    end
+  end
+
+  describe "the modal shows the whole record" do
+    test "every row offers a way to see the rest" do
+      {:ok, _view, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      assert html =~ ~s(phx-click="open_row"),
+             "the table truncates and caps at eight fields; something has to open the rest"
+    end
+
+    test "opening a row shows fields the table does not" do
+      {:ok, view, _html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      key =
+        view
+        |> render()
+        |> then(&Regex.run(~r|<td class="rdd-rows-key">([^<]+)</td>|, &1))
+        |> List.last()
+
+      html = view |> element(~s(button[phx-value-key="#{key}"])) |> render_click()
+
+      assert html =~ "rdd-modal", "clicking `view` should open the record"
+
+      # `key` is a structural column the TABLE drops — its value is already the
+      # first cell of the row — but the modal is where you go to see everything.
+      assert html =~ "<dt>key</dt>"
+    end
+
+    test "escape and the backdrop close it" do
+      {:ok, view, _html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      key =
+        view
+        |> render()
+        |> then(&Regex.run(~r|<td class="rdd-rows-key">([^<]+)</td>|, &1))
+        |> List.last()
+
+      view |> element(~s(button[phx-value-key="#{key}"])) |> render_click()
+
+      html = render_click(view, "close_row", %{})
+
+      # NOT the class name: the stylesheet ships inline on every page, so
+      # `rdd-modal-backdrop` is in the HTML whether or not a dialog renders.
+      # `role="dialog"` is produced only by the markup.
+      refute html =~ ~s(role="dialog"),
+             "a dialog a reader cannot dismiss is a trap"
+    end
+
+    test "paging closes an open modal" do
+      # It would otherwise show a row that is no longer in the list.
+      {:ok, view, _html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=__nil__")
+
+      key =
+        view
+        |> render()
+        |> then(&Regex.run(~r|<td class="rdd-rows-key">([^<]+)</td>|, &1))
+        |> List.last()
+
+      view |> element(~s(button[phx-value-key="#{key}"])) |> render_click()
+
+      {:ok, _v, html} = live(build_conn(), "#{@path}/cell/expenses/rows?status=present")
+
+      refute html =~ ~s(role="dialog")
+    end
+  end
+
   describe "the row summary chooses its fields" do
     # A row has more columns than fit on a line, so the summary picks. The
     # picking rule is the whole test: alphabetical order put `meeting_uuid` and
@@ -852,5 +984,6 @@ defmodule ReactiveDagDashboard.DagLiveTest do
       refute html =~ "=[]", "an empty list is not information and should not take a slot"
     end
   end
+
 
 end

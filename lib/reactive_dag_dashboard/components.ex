@@ -489,11 +489,51 @@ defmodule ReactiveDagDashboard.Components do
                            vertical-align: top }
       .rdd-rows-key { font-family: ui-monospace, monospace; color: var(--ink);
                       white-space: nowrap }
-      /* The record can be long and is the least structured thing here, so it
-         gets the remaining width and wraps rather than forcing a scrollbar. */
-      .rdd-rows-record { font-family: ui-monospace, monospace; font-size: 11px;
-                         color: var(--dim); word-break: break-word }
+
+      /* A COLUMN PER FIELD needs more width than the viewport when a node has
+         eight of them, so the TABLE scrolls sideways inside its own box rather
+         than the page doing it. Values do not wrap: a column whose rows are
+         one line each is what makes a value scannable down the column, which
+         is the entire reason this stopped being `k=v` text. */
+      .rdd-rows-scroll { overflow-x: auto; margin-bottom: 12px }
+      .rdd-rows-cell { font-family: ui-monospace, monospace; font-size: 11px;
+                       color: var(--dim); white-space: nowrap;
+                       max-width: 22ch; overflow: hidden;
+                       text-overflow: ellipsis }
+      .rdd-rows-open { white-space: nowrap }
       .rdd-rows-pager { display: flex; gap: 8px; margin-top: 12px }
+
+      /* THE WHOLE RECORD. The table shows eight fields of fifteen to twenty
+         and truncates each; this is where the rest lives, untruncated. */
+      .rdd-modal-backdrop { position: fixed; inset: 0; z-index: 50;
+                            background: rgba(3, 7, 12, .72);
+                            display: flex; align-items: center;
+                            justify-content: center; padding: 24px }
+      .rdd-modal { background: var(--panel, #10161f);
+                   border: 1px solid var(--border); border-radius: 8px;
+                   max-width: 900px; width: 100%; max-height: 82vh;
+                   display: flex; flex-direction: column;
+                   box-shadow: 0 24px 64px rgba(0, 0, 0, .55) }
+      .rdd-modal-head { display: flex; align-items: center;
+                        justify-content: space-between; gap: 12px;
+                        padding: 12px 16px;
+                        border-bottom: 1px solid var(--border) }
+      .rdd-modal-head code { font-size: 12px; color: var(--ink) }
+      .rdd-modal-close { background: none; border: 0; cursor: pointer;
+                         color: var(--dim); font-size: 14px; line-height: 1;
+                         padding: 4px 6px }
+      .rdd-modal-close:hover { color: var(--ink) }
+      /* Two columns: the field name stays narrow so the values line up, and
+         the value column takes the rest. A long JSON payload scrolls inside
+         its own cell rather than stretching the dialog. */
+      .rdd-modal-fields { margin: 0; padding: 12px 16px; overflow-y: auto;
+                          display: grid; grid-template-columns: minmax(0, 16ch) 1fr;
+                          gap: 6px 16px; font-size: 12px }
+      .rdd-modal-fields dt { font-family: ui-monospace, monospace;
+                             color: var(--faint); word-break: break-word }
+      .rdd-modal-fields dd { margin: 0; font-family: ui-monospace, monospace;
+                             color: var(--ink); white-space: pre-wrap;
+                             word-break: break-word; overflow-x: auto }
 
       /* A badge that is a link. Same pill, plus the affordance — the count was
          already the most legible thing on the row, so it should not change

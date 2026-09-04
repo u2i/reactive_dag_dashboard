@@ -97,7 +97,10 @@ defmodule ReactiveDagDashboard.DagLive do
 
     case plan.cells[id] do
       nil ->
-        assign(socket, :rows, %{rows: [], total: 0})
+        socket
+        |> assign(:rows, %{rows: [], total: 0})
+        |> assign(:rows_columns, [])
+        |> assign(:open_row, nil)
 
       cell ->
         wanted = if status in [nil, "__nil__"], do: [nil], else: [status]
@@ -109,11 +112,21 @@ defmodule ReactiveDagDashboard.DagLive do
             tenant: plan.tenant
           )
 
-        assign(socket, :rows, page)
+        socket
+        |> assign(:rows, page)
+        |> assign(:rows_columns, columns_for(page.rows))
+        # A modal left open across a page change would show a row that is no
+        # longer in the list.
+        |> assign(:open_row, nil)
     end
   end
 
-  defp assign_rows(socket, _other), do: assign(socket, :rows, %{rows: [], total: 0})
+  defp assign_rows(socket, _other) do
+    socket
+    |> assign(:rows, %{rows: [], total: 0})
+    |> assign(:rows_columns, [])
+    |> assign(:open_row, nil)
+  end
 
   # A display path. A node whose resource is unreadable here — a policy, an
   # unmigrated table — must degrade to "cannot read" rather than crashing the
@@ -145,20 +158,57 @@ defmodule ReactiveDagDashboard.DagLive do
     "showing #{first}–#{last} of #{total}"
   end
 
-  # One line per row, from whatever the record actually has. Which columns
-  # matter is a question about the HOST's schema and this library cannot answer
-  # it, so it shows the non-structural fields and lets the reader decide.
+  # THE COLUMNS OF THE TABLE, derived from the rows themselves.
   #
-  # Truncated per field rather than overall: a row whose first column is a
-  # 4KB blob would otherwise push every other column off the line.
-  defp record_summary(record) when is_struct(record) do
-    record
-    |> Map.from_struct()
-    |> Enum.reject(&drop_field?/1)
-    |> Enum.sort_by(&field_rank/1)
+  # Every row in a cell has the same shape — they all come from one Ash
+  # resource — so the columns can be read off the data rather than declared by
+  # the host. Verified against production: 200 rows of `meeting` and of
+  # `agenda_items` each yielded exactly ONE distinct set of non-nil fields.
+  #
+  # That is what makes this a table rather than a list of `k=v` strings. The
+  # previous rendering put eight fields into one cell, so nothing lined up and
+  # no value could be compared down a column — which is the whole reason to
+  # have rows in a grid.
+  #
+  # A field is a column if ANY row on the page carries it: a column that is
+  # empty for one row is still the same column, and dropping it per row is what
+  # makes a table ragged.
+  defp columns_for(rows) do
+    rows
+    |> Enum.flat_map(fn
+      %{record: r} when is_struct(r) ->
+        r |> Map.from_struct() |> Enum.reject(&drop_field?/1) |> Keyword.keys()
+
+      _ ->
+        []
+    end)
+    |> Enum.uniq()
+    |> Enum.sort_by(&field_rank({&1, nil}))
     |> Enum.take(8)
-    |> Enum.map_join("  ", fn {k, v} -> "#{k}=#{truncate(v)}" end)
   end
+
+  # One cell of the table. `nil` reads as an em dash rather than blank, so an
+  # absent value is distinguishable from a rendering gap.
+  defp cell_value(%{record: r}, field) when is_struct(r) do
+    case Map.get(r, field) do
+      nil -> "—"
+      v -> truncate(v)
+    end
+  end
+
+  defp cell_value(_row, _field), do: "—"
+
+  # EVERY field, for the modal — including the ones the table drops for space
+  # and the structural ones it hides. The table answers "which row"; this
+  # answers "what is in it", and truncating here would defeat the point.
+  defp full_record(%{record: r}) when is_struct(r) do
+    r
+    |> Map.from_struct()
+    |> Enum.reject(fn {k, _v} -> k in [:__meta__, :__metadata__] end)
+    |> Enum.sort_by(&field_rank/1)
+  end
+
+  defp full_record(_), do: []
 
   # Structural columns, and fields carrying nothing.
   #
@@ -166,7 +216,10 @@ defmodule ReactiveDagDashboard.DagLive do
   # only that the column exists. Two of them consumed a third of the row on
   # `meeting_shell` while `meeting_uuid` and `slug` were cut for space.
   defp drop_field?({k, v}) do
-    k in [:__meta__, :__metadata__, :id, :inserted_at, :updated_at] or
+    # `:key` joins the structural list now that the table leads with a `key`
+    # column: the same value twice on one row is noise, and it cost a slot that
+    # a real field could have used.
+    k in [:__meta__, :__metadata__, :id, :key, :inserted_at, :updated_at] or
       is_nil(v) or v == %{} or v == []
   end
 
@@ -196,7 +249,22 @@ defmodule ReactiveDagDashboard.DagLive do
     {rank, name}
   end
 
-  defp record_summary(_), do: ""
+  # The modal's value, in full. Maps and lists are the ones worth formatting —
+  # an extracted agenda is a nested structure, and `inspect/1` on one line is
+  # not something a person reads.
+  defp format_value(v) when is_map(v) or is_list(v) do
+    inspect(v, pretty: true, limit: :infinity, printable_limit: :infinity)
+  end
+
+  defp format_value(nil), do: "—"
+  defp format_value(v) when is_binary(v), do: v
+  defp format_value(v), do: inspect(v)
+
+  # A STRING IS ITS TEXT. `inspect/1` wraps it in quotes, which read as part of
+  # the value in a table cell — `"travel"` rather than travel — and cost two
+  # characters of a column that is already narrow. Everything else is inspected,
+  # because a date or a map has no better one-line form.
+  defp truncate(v) when is_binary(v), do: String.slice(v, 0, 60)
 
   defp truncate(v) do
     v |> inspect(limit: 3, printable_limit: 60) |> String.slice(0, 60)
@@ -217,6 +285,18 @@ defmodule ReactiveDagDashboard.DagLive do
   # ── the two things this page DOES ───────────────────────────────────────────
 
   @impl true
+  # The row the modal shows, found in the page already loaded rather than
+  # re-read: the reader is looking at THIS page's row, and a fresh read could
+  # return a different one if the table moved underneath.
+  def handle_event("open_row", %{"key" => key}, socket) do
+    row = Enum.find(socket.assigns.rows.rows, &(&1.key == key))
+    {:noreply, assign(socket, :open_row, row)}
+  end
+
+  def handle_event("close_row", _params, socket) do
+    {:noreply, assign(socket, :open_row, nil)}
+  end
+
   def handle_event("select", %{"cell" => cell_id}, socket) do
     {:noreply, push_patch(socket, to: path_for(socket.assigns, cell: cell_id))}
   end
@@ -1136,26 +1216,69 @@ defmodule ReactiveDagDashboard.DagLive do
           <%= showing(@rows, @rows_offset, @rows_per_page) %>
         </p>
 
-        <table :if={@rows.rows != []} class="rdd-rows-table">
-          <thead>
-            <tr>
-              <th>key</th>
-              <th>status</th>
-              <th>row</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr :for={r <- @rows.rows}>
-              <td class="rdd-rows-key"><%= r.key %></td>
-              <td><%= r.status || "—" %></td>
-              <%!-- The record, not a chosen subset. Which columns matter is a
-                    question about the HOST's schema, and this library cannot
-                    know the answer — so it shows what is there and lets the
-                    reader decide. --%>
-              <td class="rdd-rows-record"><%= record_summary(r.record) %></td>
-            </tr>
-          </tbody>
-        </table>
+        <%!-- A COLUMN PER FIELD, derived from the rows — see `columns_for/1`.
+              This used to be three columns with every field crammed into the
+              third as `k=v k=v`, so nothing lined up and no value could be
+              read down a column. --%>
+        <div :if={@rows.rows != []} class="rdd-rows-scroll">
+          <table class="rdd-rows-table">
+            <thead>
+              <tr>
+                <th>key</th>
+                <th>status</th>
+                <th :for={f <- @rows_columns}><%= f %></th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr :for={r <- @rows.rows}>
+                <td class="rdd-rows-key"><%= r.key %></td>
+                <td><%= r.status || "—" %></td>
+                <td :for={f <- @rows_columns} class="rdd-rows-cell">
+                  <%= cell_value(r, f) %>
+                </td>
+                <td>
+                  <%!-- The table shows eight fields; a record has fifteen to
+                        twenty. This opens the rest. --%>
+                  <button
+                    type="button"
+                    phx-click="open_row"
+                    phx-value-key={r.key}
+                    class="rdd-mini rdd-rows-open"
+                  >
+                    view
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <%!-- The whole record, untruncated. `phx-window-keydown` so Escape
+              closes it, and the backdrop is a button so a click outside does
+              too — both are what a reader expects of a dialog. --%>
+        <div
+          :if={@open_row}
+          class="rdd-modal-backdrop"
+          phx-click="close_row"
+          phx-window-keydown="close_row"
+          phx-key="Escape"
+        >
+          <div class="rdd-modal" phx-click-away="close_row" role="dialog" aria-modal="true">
+            <div class="rdd-modal-head">
+              <code><%= @open_row.key %></code>
+              <button type="button" phx-click="close_row" class="rdd-modal-close" aria-label="Close">
+                ✕
+              </button>
+            </div>
+            <dl class="rdd-modal-fields">
+              <%= for {k, v} <- full_record(@open_row) do %>
+                <dt><%= k %></dt>
+                <dd><%= format_value(v) %></dd>
+              <% end %>
+            </dl>
+          </div>
+        </div>
 
         <div :if={@rows.total > @rows_per_page} class="rdd-rows-pager">
           <.link

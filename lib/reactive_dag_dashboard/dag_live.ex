@@ -37,6 +37,7 @@ defmodule ReactiveDagDashboard.DagLive do
 
   alias ReactiveDag.Report
   alias ReactiveDag.Insights
+  alias ReactiveDag.Run
   alias ReactiveDag.Source
   alias ReactiveDagDashboard.{Actions, LiveUpdates, NodeDetail, Tree}
 
@@ -210,9 +211,9 @@ defmodule ReactiveDagDashboard.DagLive do
     end
   end
 
-  defp uuid_field?(field), do: String.ends_with?(Atom.to_string(field), "_uuid")
-
   defp cell_value(_row, _field), do: "—"
+
+  defp uuid_field?(field), do: String.ends_with?(Atom.to_string(field), "_uuid")
 
   # EVERY field, for the modal — including the ones the table drops for space
   # and the structural ones it hides. The table answers "which row"; this
@@ -632,7 +633,81 @@ defmodule ReactiveDagDashboard.DagLive do
   # synchronously and recording the run itself is the only way a report arrives
   # attached to a poll. The recompute columns are simply absent on a scan row,
   # which is honest — that work had not happened yet when the scan finished.
+  # ETS FIRST, the table BEHIND it — and the reason is what each can answer.
+  #
+  # An ETS entry holds the whole `ScanRun`: every step, its `triggered_by` edge,
+  # per-model token spend. That is what draws the tree and the cost columns, and
+  # it is far too much to write to a row read on every page load — the run
+  # table's `detail` is deliberately counts only, because a step's meta has held
+  # an entire LLM extraction.
+  #
+  # So they are not redundant. ETS is the DETAIL of what just happened on this
+  # node; the table is the RECORD of everything, on every node, across restarts.
+  # A run present in both renders from ETS because that row can say more.
+  #
+  # The seam is honest rather than hidden: a persisted row with no ETS entry
+  # renders without a tree, because nothing recorded one. Inventing an empty
+  # tree would claim a cascade touched nothing.
   defp runs(plan) do
+    live = live_runs(plan)
+    # NIL IS NOT AN ID. An entry recorded before the table existed has no
+    # `run_id`, and letting nil into this set would make the first uncorrelated
+    # live row suppress every persisted row that also lacks one — which is all
+    # of them, since a persisted row always has an id and never matches nil.
+    seen = live |> Enum.map(& &1[:run_id]) |> Enum.reject(&is_nil/1) |> MapSet.new()
+
+    persisted =
+      plan
+      |> persisted_runs()
+      |> Enum.reject(&MapSet.member?(seen, &1.run_id))
+
+    (live ++ persisted)
+    |> Enum.sort_by(& &1.at, {:desc, DateTime})
+    |> Enum.take(@log_runs)
+  end
+
+  # The table's rows, in the shape the log renders. Counts only — see `runs/1`.
+  defp persisted_runs(plan) do
+    for r <- Run.recent(tenant: plan.tenant, limit: @log_runs) do
+      d = r.detail || %{}
+
+      %{
+        run_id: r.id,
+        at: r.enqueued_at,
+        kind: r.kind,
+        status: r.status,
+        parent_run_id: r.parent_run_id,
+        polled?: r.kind == "scan",
+        scanned: r.cell_id,
+        duration_us: r.duration_us,
+        cascade_us: nil,
+        poll_changed: d["changed"] || 0,
+        unreachable: [],
+        # A scan recorded `blocked` could not look — the same claim
+        # `ScanRun.complete?/1` makes, carried through rather than re-derived.
+        complete?: r.status != "blocked",
+        cascaded?: r.kind in ~w(cascade resumption reprocess),
+        cells: d["cells"] || 0,
+        suspended: d["suspended"] || 0,
+        suspensions: [],
+        changed: d["changed"] || 0,
+        tokens_in: 0,
+        tokens_out: 0,
+        tokens_by: %{},
+        llm_calls: 0,
+        cache_hits: 0,
+        # NO TREE. Nothing recorded the steps, and an empty list here would
+        # render as "this cascade touched nothing" — a claim the row cannot make.
+        roots: nil
+      }
+    end
+  rescue
+    # A host that has not run `Migration.runs_up/1`. The live buffer alone is
+    # exactly the behaviour this page had before the table existed.
+    _ -> []
+  end
+
+  defp live_runs(plan) do
     # THIS GRAPH's runs. The buffer is process-wide and holds every tenant's, so
     # an unfiltered read put a scan of the Town's graph in the log the page was
     # showing for the Village — and `@log_runs` counted across all of them, so a
@@ -640,11 +715,19 @@ defmodule ReactiveDagDashboard.DagLive do
     #
     # `plan.tenant` is `"*"` for a host with one graph, which `recent/2`
     # normalises to "unfiltered" — so nothing changes for the single-graph case.
-    for %{run: run, at: at, polled?: polled?} <-
-          Insights.recent(@log_runs, tenant: plan.tenant) do
+    for entry <- Insights.recent(@log_runs, tenant: plan.tenant) do
+      %{run: run, at: at, polled?: polled?} = entry
       report = run.report
 
       %{
+        # Ties this entry to its row in the run table, so the two are not
+        # rendered as two runs. Nil on an entry recorded before the table
+        # existed, or by a host without one — such a row simply cannot be
+        # correlated, and shows from ETS alone as it always did.
+        run_id: entry[:run_id],
+        status: nil,
+        kind: nil,
+        parent_run_id: nil,
         at: at,
         # THE POLL. Zero/empty on a bare cascade, where there was none — and
         # `polled?` is what says which, rather than inferring it from a nil cell.
@@ -873,11 +956,24 @@ defmodule ReactiveDagDashboard.DagLive do
     # query is per-tenant aggregate work that belongs behind a deliberate click
     # rather than on every step of every run.
     |> assign(:pending, Insights.pending(plan))
-    # The run log. Retained in ETS by `Insights.record/1`, so it is per-node
-    # and does not survive a restart — which is the right trade for "what just
-    # happened" and the wrong one for an audit trail. A host wanting the latter
-    # stores reports where its runs already live; the library says so.
+    # The run log, from the persistent table when the host has one.
     |> assign(:runs, runs(plan))
+    # OUTSTANDING work — queued, running, or blocked. A separate assign rather
+    # than a filter over `@runs` because it answers a different question and has
+    # a different shape: `@runs` is "what happened", bounded by @log_runs, and
+    # this is "what has NOT happened", which must not be truncated by a busy
+    # history. A stuck job hidden behind 25 recent successes is exactly the
+    # failure this page exists to surface.
+    |> assign(:outstanding, outstanding(plan))
+  end
+
+  # Work that has not finished. Empty when the host has no run table — the
+  # dashboard must render against a host that has not migrated, and an empty
+  # status panel is honest there: nothing is being claimed.
+  defp outstanding(plan) do
+    Run.recent(tenant: plan.tenant, status: ~w(queued running blocked), limit: 50)
+  rescue
+    _ -> []
   end
 
   defp assign_view(%{assigns: %{root: nil}} = socket) do

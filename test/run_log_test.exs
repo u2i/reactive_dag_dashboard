@@ -62,4 +62,65 @@ defmodule ReactiveDagDashboard.RunLogTest do
       refute MapSet.member?(seen, nil), "nil is not an id and must not suppress a row"
     end
   end
+
+  describe "the status band" do
+    # The band exists because the LOG alone cannot answer "what is waiting on
+    # me" — you would scroll past 25 successes to find it. What is asserted
+    # here is that the blocked kinds arrive DISTINGUISHED: each needs a
+    # different action (decide / revive / investigate), and a count of four
+    # tells a reader nothing about what to do.
+    import Phoenix.LiveViewTest
+
+    test "each blocked kind renders its own pill" do
+      html =
+        render_component(&ReactiveDagDashboard.Components.status_band/1,
+          outstanding: [],
+          blocked: [
+            %{kind: :approval, cell: "chain_verdict", detail: %{}},
+            %{
+              kind: :stranded,
+              cell: "transcript_extract",
+              detail: %{"repair" => "ReactiveDag.Suspension.revive/1"}
+            },
+            %{kind: :discarded, cell: "agenda_docs", detail: %{"error" => "boom"}}
+          ]
+        )
+
+      assert html =~ "rdd-pill-blocked-approval"
+      assert html =~ "rdd-pill-blocked-stranded"
+      assert html =~ "rdd-pill-blocked-discarded"
+
+      assert html =~ "ReactiveDag.Suspension.revive/1",
+             "stranded must carry its repair — `Oban.retry_job/1` skips these " <>
+               "and reports success, which a reader cannot guess"
+    end
+
+    test "empty is stated, not left blank" do
+      # An empty panel reads as "not implemented", which is the one thing this
+      # must not be confused with.
+      html =
+        render_component(&ReactiveDagDashboard.Components.status_band/1,
+          outstanding: [],
+          blocked: []
+        )
+
+      assert html =~ "Nothing queued or running"
+      assert html =~ "Nothing waiting on a person"
+    end
+
+    test "outstanding shows its status, because queued and running differ" do
+      html =
+        render_component(&ReactiveDagDashboard.Components.status_band/1,
+          outstanding: [
+            %{status: "queued", cell_id: "a", kind: "cascade"},
+            %{status: "running", cell_id: "b", kind: "scan"}
+          ],
+          blocked: []
+        )
+
+      assert html =~ "rdd-pill-queued"
+      assert html =~ "rdd-pill-running"
+    end
+  end
+
 end

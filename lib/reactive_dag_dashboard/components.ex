@@ -615,6 +615,58 @@ defmodule ReactiveDagDashboard.Components do
          there is no report to expand yet, so it must not look like the finished
          rows above it do. */
       .rdd-run-live { border-color: color-mix(in srgb, var(--measured) 55%, var(--border)) }
+      /* ── status band: what is outstanding NOW, above the history ────────── */
+      .rdd-status-band {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;
+        margin: 0 0 1.25rem;
+      }
+      @media (max-width: 760px) { .rdd-status-band { grid-template-columns: 1fr } }
+      .rdd-status-half {
+        border: 1px solid #e5e7eb; border-radius: 6px; padding: .75rem .9rem;
+        background: #fff;
+      }
+      .rdd-status-half h3 {
+        margin: 0 0 .5rem; font-size: .8rem; text-transform: uppercase;
+        letter-spacing: .04em; color: #6b7280; display: flex; align-items: center;
+        gap: .5rem;
+      }
+      .rdd-count {
+        background: #1f3a5f; color: #fff; border-radius: 10px;
+        padding: 0 .4rem; font-size: .72rem; font-variant-numeric: tabular-nums;
+      }
+      /* Blocked is amber, not red: it is WAITING, not broken. Red here would
+         put a permanent alarm on a healthy graph that happens to need a
+         decision. */
+      .rdd-count-warn { background: #b45309 }
+      .rdd-status-quiet { margin: 0; color: #6b7280; font-size: .82rem }
+      .rdd-status-list { list-style: none; margin: 0; padding: 0; font-size: .82rem }
+      .rdd-status-list li {
+        display: flex; align-items: baseline; gap: .5rem; padding: .25rem 0;
+        border-top: 1px solid #f3f4f6;
+      }
+      .rdd-status-list li:first-child { border-top: 0 }
+      .rdd-pill {
+        border-radius: 3px; padding: .05rem .35rem; font-size: .7rem;
+        text-transform: uppercase; letter-spacing: .03em; white-space: nowrap;
+      }
+      .rdd-pill-queued  { background: #f3f4f6; color: #4b5563 }
+      .rdd-pill-running { background: #dbeafe; color: #1e40af }
+      .rdd-pill-blocked { background: #fef3c7; color: #92400e }
+      /* One hue per blocked KIND, because each needs a different action and a
+         reader learns the colour faster than the word. */
+      .rdd-pill-blocked-approval  { background: #ede9fe; color: #5b21b6 }
+      .rdd-pill-blocked-stranded  { background: #fee2e2; color: #991b1b }
+      .rdd-pill-blocked-discarded { background: #fef3c7; color: #92400e }
+      .rdd-status-when { color: #9ca3af; font-size: .75rem }
+      /* The repair, monospaced: it is a function to call, not prose. */
+      .rdd-status-fix {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: .72rem; color: #991b1b;
+      }
+      .rdd-status-err {
+        color: #6b7280; font-size: .75rem; overflow: hidden;
+        text-overflow: ellipsis; white-space: nowrap;
+      }
       .rdd-run-live .rdd-run-head { cursor: default }
       .rdd-run-live .rdd-run-head:hover { background: transparent }
       .rdd-live-dot { color: var(--measured); font-size: 9px; animation: rdd-pulse 1.4s ease-in-out infinite }
@@ -2232,4 +2284,91 @@ defmodule ReactiveDagDashboard.Components do
   defp key_count(%{rows: :unreadable}), do: "?"
   defp key_count(%{rows: :elsewhere}), do: "—"
   defp key_count(%{key_count: n}), do: n
+
+  @doc """
+  What is outstanding NOW — above the history, because it is the reason to open
+  the page.
+
+  Two bands, and they are not the same question:
+
+    * **outstanding** — queued or running. The machine will get to it. Worth
+      seeing because a single-concurrency queue can hide a long job behind a
+      short one, and because "nothing is happening" and "everything is queued
+      behind one extraction" look identical from the log alone.
+    * **blocked** — waiting on a PERSON. The machine will not get to it, ever,
+      without someone acting.
+
+  ## Why the blocked kinds stay apart
+
+  Each needs a different action, and a count of four tells a reader nothing
+  about what to do:
+
+    * `approval` — decide
+    * `stranded` — `ReactiveDag.Suspension.revive/1`; the job is unfetchable
+      AND undiscarded, and it dedups every future enqueue for its point, so the
+      queue looks healthy while the work is dead
+    * `discarded` — investigate; nothing retries it
+    * anything a host adds — its own thing
+
+  Collapsing them into "4 blocked" is the failure mode this band exists to
+  avoid: it reads as a number to watch rather than a list to work through.
+
+  ## Empty is a real answer
+
+  Nothing outstanding and nothing blocked is the healthy state, and it says so
+  rather than rendering an empty box — an empty panel reads as "not
+  implemented", which is the one thing it must not be confused with.
+  """
+  attr(:outstanding, :list, default: [])
+  attr(:blocked, :list, default: [])
+
+  def status_band(assigns) do
+    ~H"""
+    <div class="rdd-status-band">
+      <div class="rdd-status-half">
+        <h3>
+          Outstanding
+          <span :if={@outstanding != []} class="rdd-count"><%= length(@outstanding) %></span>
+        </h3>
+
+        <p :if={@outstanding == []} class="rdd-status-quiet">Nothing queued or running.</p>
+
+        <ul :if={@outstanding != []} class="rdd-status-list">
+          <li :for={r <- @outstanding}>
+            <span class={"rdd-pill rdd-pill-#{r.status}"}><%= r.status %></span>
+            <code><%= r.cell_id || r.kind %></code>
+            <span class="rdd-status-when"><%= r.kind %></span>
+          </li>
+        </ul>
+      </div>
+
+      <div class="rdd-status-half">
+        <h3>
+          Blocked
+          <span :if={@blocked != []} class="rdd-count rdd-count-warn">
+            <%= length(@blocked) %>
+          </span>
+        </h3>
+
+        <p :if={@blocked == []} class="rdd-status-quiet">Nothing waiting on a person.</p>
+
+        <ul :if={@blocked != []} class="rdd-status-list">
+          <li :for={b <- @blocked}>
+            <span class={"rdd-pill rdd-pill-blocked-#{b.kind}"}><%= b.kind %></span>
+            <code><%= b.cell || "—" %></code>
+            <%!-- The repair, where the library names one. `stranded` is the
+                  case a reader cannot guess: `Oban.retry_job/1` skips these
+                  and reports success. --%>
+            <span :if={b.detail["repair"]} class="rdd-status-fix">
+              <%= b.detail["repair"] %>
+            </span>
+            <span :if={b.detail["error"]} class="rdd-status-err">
+              <%= b.detail["error"] %>
+            </span>
+          </li>
+        </ul>
+      </div>
+    </div>
+    """
+  end
 end

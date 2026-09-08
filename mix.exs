@@ -64,13 +64,13 @@ defmodule ReactiveDagDashboard.MixProject do
       # Everything else this page needs shipped before rc.59, and a dashboard
       # built for the drain cannot PARTIALLY work against a cascade — it hears
       # no events at all — so one floor says everything a list of them would.
-      # rc.69 FLOOR: `ReactiveDag.Run` — the persistent run log this page reads
+      # rc.71 FLOOR: `ReactiveDag.Run` — the persistent run log this page reads
       # for history and for outstanding work. Below it the module is absent and
       # `runs/1` falls back to the ETS buffer alone, which is the behaviour this
       # page had before; but `outstanding` would be permanently empty while
       # claiming to show what is queued, so the floor is real rather than a
       # preference.
-      {:reactive_dag, "~> 0.17.0-rc.69", override: true},
+      {:reactive_dag, "~> 0.17.0-rc.71", override: true},
       {:phoenix_live_view, "~> 1.0"},
       {:phoenix, "~> 1.7"},
       {:phoenix_pubsub, "~> 2.1"},

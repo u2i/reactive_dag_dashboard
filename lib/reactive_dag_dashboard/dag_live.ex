@@ -965,6 +965,22 @@ defmodule ReactiveDagDashboard.DagLive do
     # history. A stuck job hidden behind 25 recent successes is exactly the
     # failure this page exists to surface.
     |> assign(:outstanding, outstanding(plan))
+    # BLOCKED work — waiting on a person, not on the machine. A third assign
+    # rather than a status filter over the two above, because it does not come
+    # from the run table at all: `:approval` is a suspension, `:stranded` and
+    # `:discarded` are Oban rows, and a host may contribute more. A job can be
+    # blocked without ever having had a run row.
+    |> assign(:blocked, blocked(plan))
+  end
+
+  # Work that will not proceed without a person. Each kind needs a DIFFERENT
+  # action from whoever is reading — decide, revive, investigate — so they are
+  # kept distinguished rather than counted together; rendering them alike
+  # teaches a reader to ignore all of them.
+  defp blocked(plan) do
+    Run.blocked(tenant: plan.tenant, limit: 25)
+  rescue
+    _ -> []
   end
 
   # Work that has not finished. Empty when the host has no run table — the
@@ -1300,6 +1316,16 @@ defmodule ReactiveDagDashboard.DagLive do
       <p :if={is_nil(@root) and @view != :log} class="rdd-prompt">
         Pick <%= if @direction == :upstream, do: "an output", else: "a source" %> above.
       </p>
+
+      <%!-- STATUS ABOVE HISTORY. What is stuck now is the reason to open this
+            page; what happened last week is why you stay on it. Putting the
+            log first meant scrolling past 25 successes to find the one thing
+            waiting on you. --%>
+      <.status_band
+        :if={@view == :log}
+        outstanding={@outstanding}
+        blocked={@blocked}
+      />
 
       <.log
         :if={@view == :log}

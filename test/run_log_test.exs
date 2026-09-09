@@ -196,4 +196,51 @@ defmodule ReactiveDagDashboard.RunLogTest do
     end
   end
 
+
+  describe "the status band uses the dashboard's palette" do
+    import Phoenix.LiveViewTest
+    # THE MISTAKE THIS CATCHES. The band shipped in light-mode Tailwind values
+    # — `#fff` cards, `#f3f4f6` pills, `#e5e7eb` borders — into a page whose
+    # ground is `--bg: #0e1116`. A white panel on a dark dashboard.
+    #
+    # Nothing caught it because every test asserted CLASS NAMES, which were
+    # correct; the colours behind them were not, and no test looked at the
+    # stylesheet at all.
+    test "no hardcoded hex in the band's rules" do
+      css = render_component(&ReactiveDagDashboard.Components.styles/1, [])
+
+      band =
+        css
+        |> String.split("status band")
+        |> Enum.at(1, "")
+        |> String.split(".rdd-run-live")
+        |> List.first()
+
+      # COMMENTS STRIPPED FIRST. The block documents the mistake by naming the
+      # offending values, so scanning raw text finds them and fails on its own
+      # explanation — which is what happened the first time this ran.
+      hexes =
+        band
+        |> String.replace(~r|/\*.*?\*/|s, "")
+        |> then(&Regex.scan(~r/#[0-9a-fA-F]{3,6}\b/, &1))
+        |> List.flatten()
+        |> Enum.uniq()
+
+      assert hexes == [],
+             "the band must use the dashboard's tokens (var(--panel), var(--attested), " <>
+               "var(--gap)) so it inherits the theme; found #{inspect(hexes)}"
+    end
+
+    test "each blocked kind maps to a semantic token" do
+      css = render_component(&ReactiveDagDashboard.Components.styles/1, [])
+
+      # Every kind `Run.blocked/1` can return needs a rule, or it renders with
+      # the bare pill and a reader cannot tell it apart.
+      for kind <- ~w(approval orphaned stranded discarded spend_gated) do
+        assert css =~ ".rdd-pill-blocked-#{kind}",
+               "blocked kind `#{kind}` has no pill rule"
+      end
+    end
+  end
+
 end

@@ -616,55 +616,100 @@ defmodule ReactiveDagDashboard.Components do
          rows above it do. */
       .rdd-run-live { border-color: color-mix(in srgb, var(--measured) 55%, var(--border)) }
       /* ── status band: what is outstanding NOW, above the history ────────── */
+      /*
+         TOKENS, not hex. The first version of this band was written in
+         light-mode Tailwind values — `#fff` cards, `#f3f4f6` pills, `#e5e7eb`
+         borders — and dropped into a page whose ground is `--bg: #0e1116`. A
+         white panel on a dark dashboard, which is what "colors aren't a good
+         choice" meant.
+         The dashboard already has a semantic vocabulary and two of its terms
+         are exactly these meanings: `--attested` (amber) for something a person
+         has to affirm, `--gap` for rows that are not what they should be. Using
+         them means the band inherits any future theme change instead of
+         pinning a second palette beside the first. */
       .rdd-status-band {
-        display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;
-        margin: 0 0 1.25rem;
+        display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+        margin: 0 0 14px; max-width: 1080px;
       }
       @media (max-width: 760px) { .rdd-status-band { grid-template-columns: 1fr } }
       .rdd-status-half {
-        border: 1px solid #e5e7eb; border-radius: 6px; padding: .75rem .9rem;
-        background: #fff;
+        border: 1px solid var(--border); border-radius: 9px;
+        background: var(--panel); padding: 9px 12px;
       }
       .rdd-status-half h3 {
-        margin: 0 0 .5rem; font-size: .8rem; text-transform: uppercase;
-        letter-spacing: .04em; color: #6b7280; display: flex; align-items: center;
-        gap: .5rem;
+        margin: 0 0 7px; font-size: 9.5px; text-transform: uppercase;
+        letter-spacing: .07em; color: var(--faint); font-weight: 700;
+        display: flex; align-items: center; gap: 6px;
       }
       .rdd-count {
-        background: #1f3a5f; color: #fff; border-radius: 10px;
-        padding: 0 .4rem; font-size: .72rem; font-variant-numeric: tabular-nums;
+        color: var(--ink); background: var(--panel2);
+        border: 1px solid var(--border); border-radius: 9px;
+        padding: 0 6px; font-size: 10px; font-variant-numeric: tabular-nums;
       }
-      /* Blocked is amber, not red: it is WAITING, not broken. Red here would
-         put a permanent alarm on a healthy graph that happens to need a
-         decision. */
-      .rdd-count-warn { background: #b45309 }
-      .rdd-status-quiet { margin: 0; color: #6b7280; font-size: .82rem }
-      .rdd-status-list { list-style: none; margin: 0; padding: 0; font-size: .82rem }
+      /* AMBER, not red: blocked is WAITING, not broken. A red alarm on a graph
+         that merely needs a decision is an alarm that gets ignored. */
+      .rdd-count-warn {
+        color: var(--attested);
+        border-color: color-mix(in srgb, var(--attested) 45%, var(--border));
+      }
+      .rdd-status-quiet { margin: 0; color: var(--faint); font-size: 11.5px }
+      .rdd-status-list { list-style: none; margin: 0; padding: 0; font-size: 11.5px }
       .rdd-status-list li {
-        display: flex; align-items: baseline; gap: .5rem; padding: .25rem 0;
-        border-top: 1px solid #f3f4f6;
+        display: flex; align-items: baseline; gap: 7px; padding: 4px 0;
+        border-top: 1px solid var(--border);
       }
       .rdd-status-list li:first-child { border-top: 0 }
-      .rdd-pill {
-        border-radius: 3px; padding: .05rem .35rem; font-size: .7rem;
-        text-transform: uppercase; letter-spacing: .03em; white-space: nowrap;
+      .rdd-status-list code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: var(--ink);
       }
-      .rdd-pill-queued  { background: #f3f4f6; color: #4b5563 }
-      .rdd-pill-running { background: #dbeafe; color: #1e40af }
-      .rdd-pill-blocked { background: #fef3c7; color: #92400e }
-      /* One hue per blocked KIND, because each needs a different action and a
-         reader learns the colour faster than the word. */
-      .rdd-pill-blocked-approval  { background: #ede9fe; color: #5b21b6 }
-      .rdd-pill-blocked-stranded  { background: #fee2e2; color: #991b1b }
-      .rdd-pill-blocked-discarded { background: #fef3c7; color: #92400e }
-      .rdd-status-when { color: #9ca3af; font-size: .75rem }
-      /* The repair, monospaced: it is a function to call, not prose. */
+      .rdd-pill {
+        border-radius: 3px; padding: 1px 5px; font-size: 9.5px;
+        text-transform: uppercase; letter-spacing: .06em; white-space: nowrap;
+        border: 1px solid var(--border); background: var(--panel2);
+        color: var(--dim);
+      }
+      /* Queued is deliberately UNMARKED — the machine will get to it, and a
+         colour here would compete with the states that need attention. */
+      .rdd-pill-queued { color: var(--faint) }
+      .rdd-pill-running {
+        color: var(--derived);
+        border-color: color-mix(in srgb, var(--derived) 45%, var(--border));
+      }
+      /* One term per blocked KIND, because each needs a different action and a
+         reader learns the colour faster than the word:
+           approval  — a person must decide            (attested)
+           orphaned  — nothing is coming at all        (gap, the strongest)
+           stranded  — a job exists but cannot run     (gap)
+           discarded — it gave up                      (declared) */
+      .rdd-pill-blocked-approval {
+        color: var(--attested);
+        border-color: color-mix(in srgb, var(--attested) 45%, var(--border));
+      }
+      .rdd-pill-blocked-orphaned {
+        color: var(--gap);
+        border-color: color-mix(in srgb, var(--gap) 55%, var(--border));
+      }
+      .rdd-pill-blocked-stranded {
+        color: var(--gap);
+        border-color: color-mix(in srgb, var(--gap) 45%, var(--border));
+      }
+      .rdd-pill-blocked-discarded {
+        color: var(--declared);
+        border-color: color-mix(in srgb, var(--declared) 45%, var(--border));
+      }
+      .rdd-pill-blocked-spend_gated {
+        color: var(--attested);
+        border-color: color-mix(in srgb, var(--attested) 45%, var(--border));
+      }
+      .rdd-status-when { color: var(--faint); font-size: 10px }
+      /* The repair is a function to CALL, so it is set as code rather than prose. */
       .rdd-status-fix {
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: .72rem; color: #991b1b;
+        font-size: 10px; color: var(--gap);
       }
       .rdd-status-err {
-        color: #6b7280; font-size: .75rem; overflow: hidden;
+        color: var(--dim); font-size: 10px; overflow: hidden;
         text-overflow: ellipsis; white-space: nowrap;
       }
       .rdd-run-live .rdd-run-head { cursor: default }

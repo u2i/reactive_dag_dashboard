@@ -1601,6 +1601,20 @@ defmodule ReactiveDagDashboard.Components do
                 nothing and is not idle; it is waiting.
 
                 Only the last is "there was nothing to do". --%>
+          <%!-- NO TREE RECORDED, which is not an empty tree. A persisted row
+                carries counts only — the step tree lives in the ETS entry, and
+                a row read back from the table after a restart has none. Saying
+                "nothing to recompute" there would assert something the row
+                cannot know.
+
+                `nil` also broke the `:for` below: it is an atom, so
+                `Enumerable not implemented for Atom` crashed the LiveView on
+                mount and the runs tab did nothing at all. --%>
+          <p :if={is_nil(run.roots)} class="rdd-run-empty">
+            Recorded before this node restarted — the cells it touched are in
+            the run's own detail, not as a tree.
+          </p>
+
           <p :if={run.roots == []} class="rdd-run-empty">
             <%= cond do %>
               <% run.polled? and not run.cascaded? -> %>
@@ -1614,7 +1628,7 @@ defmodule ReactiveDagDashboard.Components do
             <% end %>
           </p>
 
-          <.step_node :for={root <- run.roots} node={root} />
+          <.step_node :for={root <- run.roots || []} node={root} />
         </div>
       </div>
     </div>

@@ -123,4 +123,77 @@ defmodule ReactiveDagDashboard.RunLogTest do
     end
   end
 
+
+  describe "the log view renders a row with NO step tree" do
+    # THE CRASH. A persisted row carries counts only — the step tree lives in
+    # the ETS entry — so `roots` is nil, and `:for={root <- run.roots}` raised
+    # `Enumerable not implemented for Atom` and took the whole LiveView down on
+    # mount. The runs tab did nothing at all.
+    #
+    # Rendered through the COMPONENT rather than the live view, because this
+    # suite configures no repo — `Run.queued/2` returns nil here, so a test
+    # that mounts the page renders no persisted row and proves nothing. My
+    # first attempt did exactly that and passed.
+    import Phoenix.LiveViewTest
+
+    defp run_row(overrides) do
+      Map.merge(
+        %{
+          run_id: "r1",
+          at: DateTime.utc_now(),
+          kind: "cascade",
+          status: "done",
+          parent_run_id: nil,
+          polled?: false,
+          scanned: "expenses",
+          duration_us: 1_234,
+          cascade_us: nil,
+          poll_changed: 0,
+          unreachable: [],
+          complete?: true,
+          cascaded?: true,
+          cells: 3,
+          suspended: 0,
+          suspensions: [],
+          changed: 7,
+          tokens_in: 0,
+          tokens_out: 0,
+          tokens_by: %{},
+          llm_calls: 0,
+          cache_hits: 0,
+          roots: []
+        },
+        overrides
+      )
+    end
+
+    test "nil roots renders instead of crashing" do
+      html =
+        render_component(&ReactiveDagDashboard.Components.log/1,
+          runs: [run_row(%{roots: nil})],
+          activity: %{},
+          cascading?: false
+        )
+
+      assert html =~ "Recorded before this node restarted",
+             "a row with no recorded tree must say so"
+
+      refute html =~ "Nothing to recompute",
+             "no tree is not an empty tree — that would assert something the " <>
+               "row cannot know"
+    end
+
+    test "an empty tree still says nothing was recomputed" do
+      html =
+        render_component(&ReactiveDagDashboard.Components.log/1,
+          runs: [run_row(%{roots: []})],
+          activity: %{},
+          cascading?: false
+        )
+
+      assert html =~ "Nothing to recompute"
+      refute html =~ "Recorded before this node restarted"
+    end
+  end
+
 end
